@@ -1,5 +1,5 @@
 import { classifyMarketRegime, selectAdaptiveExperts, buildMetaFeatures, predictMetaLabel } from "./ai_layers.ts";
-import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeights, applyExpertWeights, decisionIntelligence } from "./advanced_intelligence.ts";
+import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeights, applyExpertWeights, decisionIntelligence, collectForwardLabels } from "./advanced_intelligence.ts";
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
@@ -253,6 +253,7 @@ async function runCycle(source="scheduled") {
     s.lastCycleAt=now();s.lastReport=report;await writeState(s);return report;
   }
   const regimeResult=classifyMarketRegime(bars.M5,s.lastReport?.regime||null);
+  const learningCollection=collectForwardLabels(s,bars.M5,regimeResult.regime,last.time);
   const generated=generateCandidates(bars,chartContext,mid,kronos,ref,s.closedTrades,regimeResult);
   const model=await loadMetaModel();
   const opportunityModel=await loadArtifact("/data/gold-ai-opportunity-model.json");
@@ -293,6 +294,7 @@ async function runCycle(source="scheduled") {
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
     bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
+    learningData:learningCollection,
     aiOpportunityDiscovery:{status:discovery.status,modelVersion:opportunityModel?.modelVersion||null,candidates:discovery.candidates.length},
     scenarioPrediction:scenarioForecast,
     metaLearning:{status:"PAPER_OUTCOME_ADAPTATION",expertWeights:expertLearning},
