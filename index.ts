@@ -1,7 +1,7 @@
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.3.0";
+const VERSION = "gold-ai-intelligence-0.4.0";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -207,8 +207,8 @@ async function runCycle(source="scheduled") {
   const cost=n(Bun.env.PAPER_TRADE_COST_USD)??0.37,stress=n(Bun.env.PAPER_STRESS_COST_USD)??0.74;
   const lotSize=n(Bun.env.PAPER_LOT_SIZE)??0.01,contract=n(Bun.env.CONTRACT_OZ_PER_LOT)??100,lotOz=lotSize*contract;
   const maxRisk=n(Bun.env.MAX_TRADE_RISK_USD)??2,dailyLimit=n(Bun.env.DAILY_LOSS_LIMIT_USD)??2;
-  const kronos=await fetchKronos(bars);
-  console.log("AI_KRONOS_RESULT",JSON.stringify(kronos));
+  let kronos:any={status:"SKIPPED",reason:"STALE_OR_INSUFFICIENT_MARKET_DATA"};
+  if(last&&bars.M5.length>=100&&fresh&&mid!==null){kronos=await fetchKronos(bars);console.log("AI_KRONOS_RESULT",JSON.stringify(kronos));}
   const ref=engine.ok?engine:null;
   if(!last||bars.M5.length<30||!fresh||mid===null) {
     console.log("AI_DATA_GATE",JSON.stringify({fresh,barCount:bars.M5.length,quote,chartFreshness:freshnessPlaceholder(chart)}));
