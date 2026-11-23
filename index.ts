@@ -262,7 +262,8 @@ async function runCycle(source="scheduled") {
   const scenarioForecast=discoveryVector?predictScenarios(scenarioModel,discoveryVector):{status:"INSUFFICIENT_FEATURE_HISTORY",horizons:{}};
   const discovery=discoveryVector?discoverOpportunities(opportunityModel,discoveryVector,mid,generated.atr,last.time,regimeResult.regime):{status:"INSUFFICIENT_FEATURE_HISTORY",candidates:[]};
   let adaptiveCandidates=selectAdaptiveExperts([...generated.candidates,...discovery.candidates],regimeResult);
-  const expertLearning=learnExpertWeights(s.closedTrades,regimeResult.regime);
+  const shadowLearning=s.candidateHistory.filter((x:any)=>x.type==="SHADOW_OUTCOME").map((o:any)=>({...o,regime:s.candidateHistory.find((z:any)=>z.id===o.id&&!z.type)?.regime||null}));
+  const expertLearning=learnExpertWeights([...s.closedTrades,...shadowLearning],regimeResult.regime);
   adaptiveCandidates=applyExpertWeights(adaptiveCandidates,expertLearning);
   for(const c of adaptiveCandidates) {
     c.metaFeatures=buildMetaFeatures(c,regimeResult,quote.spread,generated.atr);
