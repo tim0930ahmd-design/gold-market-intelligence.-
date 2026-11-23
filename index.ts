@@ -291,7 +291,7 @@ async function runCycle(source="scheduled") {
     if(s.openPositions.length>=4)break;
   }
   for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
-  if(s.candidateHistory.length>2500)s.candidateHistory=s.candidateHistory.slice(-2500);
+  if(s.candidateHistory.length>20000)s.candidateHistory=s.candidateHistory.slice(-20000);
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
     bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
