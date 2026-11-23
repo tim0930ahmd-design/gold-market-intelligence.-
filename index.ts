@@ -128,7 +128,7 @@ async function fetchKronos(bars:any) {
   const m5=bars.M5||[];
   if(m5.length<100)return {status:"UNAVAILABLE",reason:"INSUFFICIENT_CANDLES"};
   try {
-    const r=await getJson(URLS.chartLab+"/kronos-forecast",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({timeframe:"M5",candles:m5.slice(-200),pred_len:12,sample_count:1})},50000);
+    const r=await getJson(URLS.chartLab+"/kronos-forecast",{},50000);
     return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
