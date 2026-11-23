@@ -1,9 +1,10 @@
 import { classifyMarketRegime, selectAdaptiveExperts, buildMetaFeatures, predictMetaLabel } from "./ai_layers.ts";
+import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeights, applyExpertWeights, decisionIntelligence } from "./advanced_intelligence.ts";
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.5.0";
+const VERSION = "gold-ai-intelligence-0.6.0";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -150,6 +151,10 @@ async function fetchKronos(bars:any) {
     return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
+async function loadArtifact(path:string) {
+  try { const file=Bun.file(path); if(!await file.exists())return null; return await file.json(); }
+  catch(e:any) { console.log("AI_ARTIFACT_LOAD_ERROR",JSON.stringify({path,error:String(e?.message||e)})); return null; }
+}
 async function loadMetaModel() {
   try {
     const file=Bun.file("/data/gold-ai-xgb-model.json");
@@ -250,18 +255,27 @@ async function runCycle(source="scheduled") {
   const regimeResult=classifyMarketRegime(bars.M5,s.lastReport?.regime||null);
   const generated=generateCandidates(bars,chartContext,mid,kronos,ref,s.closedTrades,regimeResult);
   const model=await loadMetaModel();
-  const adaptiveCandidates=selectAdaptiveExperts(generated.candidates,regimeResult);
+  const opportunityModel=await loadArtifact("/data/gold-ai-opportunity-model.json");
+  const scenarioModel=await loadArtifact("/data/gold-ai-scenario-model.json");
+  const discoveryVector=marketVector(bars.M5,regimeResult.regime,last.time);
+  const scenarioForecast=discoveryVector?predictScenarios(scenarioModel,discoveryVector):{status:"INSUFFICIENT_FEATURE_HISTORY",horizons:{}};
+  const discovery=discoveryVector?discoverOpportunities(opportunityModel,discoveryVector,mid,generated.atr,last.time,regimeResult.regime):{status:"INSUFFICIENT_FEATURE_HISTORY",candidates:[]};
+  let adaptiveCandidates=selectAdaptiveExperts([...generated.candidates,...discovery.candidates],regimeResult);
+  const expertLearning=learnExpertWeights(s.closedTrades,regimeResult.regime);
+  adaptiveCandidates=applyExpertWeights(adaptiveCandidates,expertLearning);
   for(const c of adaptiveCandidates) {
     c.metaFeatures=buildMetaFeatures(c,regimeResult,quote.spread,generated.atr);
     c.metaLabel=model?predictMetaLabel(model,c.metaFeatures):null;
     c.metaEVUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-cost).toFixed(3)):null;
     c.metaEVStressUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-stress).toFixed(3)):null;
+    c.decisionIntelligence=decisionIntelligence(c,c.metaLabel,cost,lotOz,stress);
+    c.scenarioForecast=scenarioForecast;
   }
   const accepted:any[]=[],rejected:any[]=[];
   for(const c of adaptiveCandidates) {
     let why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
     if(!why&&!model)why="META_MODEL_NOT_TRAINED_COLLECTING_LABELS";
-    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0))why="META_LABELER_LOW_EXPECTED_VALUE";
+    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.decisionIntelligence?.decision!=="PAPER_ELIGIBLE"))why="META_LABELER_LOW_EXPECTED_VALUE";
     if(why) {
       rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
       s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz});
@@ -279,12 +293,16 @@ async function runCycle(source="scheduled") {
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
     bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
+    aiOpportunityDiscovery:{status:discovery.status,modelVersion:opportunityModel?.modelVersion||null,candidates:discovery.candidates.length},
+    scenarioPrediction:scenarioForecast,
+    metaLearning:{status:"PAPER_OUTCOME_ADAPTATION",expertWeights:expertLearning},
+    decisionIntelligence:{status:model?"XGBOOST_EV_AND_STRESS_GATE":"WAITING_FOR_VALIDATED_XGBOOST",policy:"BUY_SELL_NO_TRADE"},
     expertsEvaluated:["BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM","BREAKOUT_RETEST","TREND_PULLBACK","TREND_CONTINUATION","RANGE_REJECTION","REVERSAL","MOMENTUM_IMPULSE"],
     candidatesGenerated:adaptiveCandidates.length,expertsSelected:[...new Set(adaptiveCandidates.map(c=>c.expert))],accepted,rejected,openPositions:s.openPositions.length,shadowTracking:s.shadowPositions.length,
     kronos,referenceEngine:{status:engine.status,version:engine.engineVersion,plan:engine.plan?.decision||null,visionBlocked:engine.visionHealth?.entryBlocked??null},
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
     metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},liveTrading:false,
-    disclaimer:model?"PAPER only. XGBoost probabilities are model estimates validated on a chronological holdout, not guarantees.":"PAPER only. No probability is fabricated: candidates are shadow-tracked until enough outcomes exist to train and validate XGBoost."};
+    disclaimer:model?"PAPER only. XGBoost probabilities require independent validation; discovery/scenario models activate only when separately validated artifacts are installed.":"PAPER only. No probability is fabricated: expert candidates are shadow-tracked until enough outcomes exist to train and validate XGBoost. AI discovery and scenario prediction remain inactive until their own validated artifacts exist."};
   s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;
   await writeState(s);event(s,{type:"CYCLE",bar:last.time,decision:report.decision,candidates:generated.candidates.length,accepted:accepted.length,rejected:rejected.length,regime:generated.regime});
   console.log("AI_ENGINE_CYCLE",JSON.stringify(report));
