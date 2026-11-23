@@ -70,6 +70,7 @@ export function predictMetaLabel(model:any,x:number[]) {
     const m=model.models?.[cls];if(!m||!Array.isArray(m.trees))return null;
     let margin=Number(m.baseMargin||0);
     for(const tree of m.trees)margin+=walkTree(tree,x);
+    margin=margin*Number(m.plattA??1)+Number(m.plattB??0);
     out[cls]=1/(1+Math.exp(-clamp(margin,-30,30)));
   }
   const sum=out.TARGET+out.STOP+out.TIMEOUT;
