@@ -97,6 +97,20 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
   if(sh&&last.high>sh.price&&last.close<sh.price&&last.close<last.open)add("LIQUIDITY_SWEEP_RECLAIM","SELL",Math.max(last.high,sh.price)+a*0.18,{level:sh.price,h1b,m15b},18);
   if(sh&&last.close>sh.price&&prev.close<=sh.price)add("BREAKOUT_CONTINUATION","BUY",Math.min(last.low,sh.price-a*0.25),{level:sh.price,h1b,m15b},14);
   if(sl&&last.close<sl.price&&prev.close>=sl.price)add("BREAKOUT_CONTINUATION","SELL",Math.max(last.high,sl.price+a*0.25),{level:sl.price,h1b,m15b},14);
+  const recent=m5.slice(-7,-1);
+  if(sh&&recent.some(b=>b.close>sh.price)&&last.low<=sh.price+a*0.12&&last.close>sh.price&&last.close>last.open)
+    add("BREAKOUT_RETEST","BUY",Math.min(last.low,sh.price-a*0.16),{level:sh.price,retest:true,h1b,m15b},16);
+  if(sl&&recent.some(b=>b.close<sl.price)&&last.high>=sl.price-a*0.12&&last.close<sl.price&&last.close<last.open)
+    add("BREAKOUT_RETEST","SELL",Math.max(last.high,sl.price+a*0.16),{level:sl.price,retest:true,h1b,m15b},16);
+  const priorHigh=Math.max(...m5.slice(-6,-1).map(b=>b.high)),priorLow=Math.min(...m5.slice(-6,-1).map(b=>b.low));
+  if(regime==="TREND_UP"&&h1b==="BULLISH"&&m15b==="BULLISH"&&last.close>priorHigh&&body>=a*0.35)
+    add("TREND_CONTINUATION","BUY",Math.min(last.low,priorHigh-a*0.18),{breakLevel:priorHigh,h1b,m15b},15);
+  if(regime==="TREND_DOWN"&&h1b==="BEARISH"&&m15b==="BEARISH"&&last.close<priorLow&&body>=a*0.35)
+    add("TREND_CONTINUATION","SELL",Math.max(last.high,priorLow+a*0.18),{breakLevel:priorLow,h1b,m15b},15);
+  if(sl&&last.low<sl.price&&last.close>sl.price&&last.close>prev.high&&last.close>last.open)
+    add("REVERSAL","BUY",Math.min(last.low,sl.price)-a*0.22,{sweptLevel:sl.price,structureShift:true},17);
+  if(sh&&last.high>sh.price&&last.close<sh.price&&last.close<prev.low&&last.close<last.open)
+    add("REVERSAL","SELL",Math.max(last.high,sh.price)+a*0.22,{sweptLevel:sh.price,structureShift:true},17);
   if(demand&&(h1b==="BULLISH"||m15b==="BULLISH")&&last.close>last.open&&last.close>=demand.zoneLow)add("TREND_PULLBACK","BUY",Math.min(last.low,demand.zoneLow)-a*0.18,{zone:demand,h1b,m15b},12);
   if(supply&&(h1b==="BEARISH"||m15b==="BEARISH")&&last.close<last.open&&last.close<=supply.zoneHigh)add("TREND_PULLBACK","SELL",Math.max(last.high,supply.zoneHigh)+a*0.18,{zone:supply,h1b,m15b},12);
   if((regime==="RANGE"||regime==="RANGING")&&demand&&last.low<=demand.zoneHigh&&last.close>last.open)add("RANGE_REJECTION","BUY",Math.min(last.low,demand.zoneLow)-a*0.15,{zone:demand},10);
@@ -139,7 +153,7 @@ async function loadMetaModel() {
     const file=Bun.file("/data/gold-ai-xgb-model.json");
     if(!await file.exists())return null;
     const model=await file.json();
-    return model?.kind==="xgboost-one-vs-rest-v1"&&model.featureCount===22?model:null;
+    return model?.kind==="xgboost-one-vs-rest-v1"&&model.featureCount===25?model:null;
   } catch(e:any) { console.log("META_MODEL_LOAD_ERROR",String(e?.message||e)); return null; }
 }
 function stats(closed:any[]) {
@@ -253,7 +267,7 @@ async function runCycle(source="scheduled") {
       continue;
     }
     const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
-    s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore});
+    s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
     event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
     console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore}));
     if(s.openPositions.length>=4)break;
@@ -263,7 +277,7 @@ async function runCycle(source="scheduled") {
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
     bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
-    expertsEvaluated:["LIQUIDITY_SWEEP_RECLAIM","BREAKOUT_CONTINUATION","TREND_PULLBACK","RANGE_REJECTION","MOMENTUM_IMPULSE","GEMINI_VISION"],
+    expertsEvaluated:["BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM","BREAKOUT_RETEST","TREND_PULLBACK","TREND_CONTINUATION","RANGE_REJECTION","REVERSAL","MOMENTUM_IMPULSE"],
     candidatesGenerated:adaptiveCandidates.length,expertsSelected:[...new Set(adaptiveCandidates.map(c=>c.expert))],accepted,rejected,openPositions:s.openPositions.length,shadowTracking:s.shadowPositions.length,
     kronos,referenceEngine:{status:engine.status,version:engine.engineVersion,plan:engine.plan?.decision||null,visionBlocked:engine.visionHealth?.entryBlocked??null},
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
