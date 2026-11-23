@@ -18,7 +18,7 @@ def chronological(rows):
     return rows[:a],rows[a:b],rows[b:]
 
 def fit_binary(rows,side,cost,stress_cost,lot_oz):
-    rows=[r for r in rows if r.get("discovery",{}).get(side) in ("TARGET","STOP")]
+    rows=[r for r in rows if r.get("discovery",{}).get(side) in ("TARGET","STOP","TIMEOUT")]
     if len(rows)<500:return {"status":"INSUFFICIENT_SAMPLES","samples":len(rows)}
     tr,cal,te=chronological(rows)
     if min(len(tr),len(cal),len(te))<50:return {"status":"INSUFFICIENT_TIME_SPLIT","samples":len(rows)}
@@ -40,9 +40,9 @@ def fit_binary(rows,side,cost,stress_cost,lot_oz):
     for threshold in thresholds:
         ix=np.where(pc>=threshold)[0]
         if len(ix)<30:continue
-        # Barrier labels are +1 ATR for TARGET, -0.75 ATR for STOP.
+        # Barrier payoffs: +1 ATR for TARGET, -0.75 ATR for STOP, zero gross for TIMEOUT.
         atrs=np.asarray([float(cal[i].get("atr",0)) for i in ix])
-        gross=np.where(yc[ix]==1,atrs*lot_oz,-.75*atrs*lot_oz)
+        gross=np.asarray([atrs[j]*lot_oz if cal[i]["discovery"][side]=="TARGET" else (-.75*atrs[j]*lot_oz if cal[i]["discovery"][side]=="STOP" else 0.0) for j,i in enumerate(ix)])
         net=gross-cost
         loss=np.abs(net[net<0]).sum(); gain=net[net>0].sum()
         pf=gain/loss if loss>0 else 0
@@ -53,7 +53,7 @@ def fit_binary(rows,side,cost,stress_cost,lot_oz):
     best=max(choices,key=lambda z:z[0]); threshold=best[1]
     ix=np.where(pt>=threshold)[0]
     atrs=np.asarray([float(te[i].get("atr",0)) for i in ix])
-    gross=np.where(yt[ix]==1,atrs*lot_oz,-.75*atrs*lot_oz)
+    gross=np.asarray([atrs[j]*lot_oz if te[i]["discovery"][side]=="TARGET" else (-.75*atrs[j]*lot_oz if te[i]["discovery"][side]=="STOP" else 0.0) for j,i in enumerate(ix)])
     net=gross-cost; stress_net=gross-stress_cost
     gain=net[net>0].sum(); loss=np.abs(net[net<0]).sum()
     pf=float(gain/loss) if loss>0 else 0
