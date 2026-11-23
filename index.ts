@@ -1,7 +1,9 @@
+import { classifyMarketRegime, selectAdaptiveExperts, buildMetaFeatures, predictMetaLabel } from "./ai_layers.ts";
+
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.4.0";
+const VERSION = "gold-ai-intelligence-0.5.0";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -76,7 +78,7 @@ function expertAdjustment(closed:any[],expert:string) {
   const avgR=rows.reduce((a,x)=>a+Number(x.resultR||0),0)/rows.length;
   return clamp((wins-0.5)*16+avgR*4,-8,8);
 }
-function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:any,closed:any[]) {
+function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:any,closed:any[],regimeOverride:any=null) {
   const out:Candidate[]=[],m5:Candle[]=bars.M5||[],last=m5.at(-1),prev=m5.at(-2),frames=chart.frames||{};
   const f5=frames.M5||{},f15=frames.M15||{},h1=frames.H1||{},a=n(f5.atr14)||calcAtr(m5);
   if(!last||!prev||!a||!Number.isFinite(mid))return {candidates:out,bar:last||null,atr:a,regime:"UNKNOWN"};
@@ -85,7 +87,7 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
   const sh=highs.at(-1),sl=lows.at(-1);
   const zones=[...(f15.zones||[]),...(h1.zones||[]),...(frames.H4?.zones||[])];
   const demand=nearestZone(zones,"DEMAND",mid,a*0.45),supply=nearestZone(zones,"SUPPLY",mid,a*0.45);
-  const h1b=String(h1.bias||"NEUTRAL"),m15b=String(f15.bias||"NEUTRAL"),regime=String(f15.regime||"TRANSITION");
+  const h1b=String(h1.bias||"NEUTRAL"),m15b=String(f15.bias||"NEUTRAL"),regime=String(regimeOverride?.regime||f15.regime||"TRANSITION");
   const body=Math.abs(last.close-last.open),pos=(last.close-last.low)/Math.max(0.00001,last.high-last.low);
   const add=(expert:string,side:"BUY"|"SELL",stop:number,features:any,bonus=0)=>{
     const c=buildCandidate(expert,side,mid,a,stop,last,regime,features,50+bonus);
@@ -132,6 +134,14 @@ async function fetchKronos(bars:any) {
     return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
+async function loadMetaModel() {
+  try {
+    const file=Bun.file("/data/gold-ai-xgb-model.json");
+    if(!await file.exists())return null;
+    const model=await file.json();
+    return model?.kind==="xgboost-one-vs-rest-v1"&&model.featureCount===22?model:null;
+  } catch(e:any) { console.log("META_MODEL_LOAD_ERROR",String(e?.message||e)); return null; }
+}
 function stats(closed:any[]) {
   const sum=(a:any[])=>{const wins=a.filter(x=>x.netUsd>0),loss=a.filter(x=>x.netUsd<0),gw=wins.reduce((v,x)=>v+x.netUsd,0),gl=Math.abs(loss.reduce((v,x)=>v+x.netUsd,0));return {trades:a.length,wins:wins.length,losses:loss.length,winRate:a.length?Number((wins.length/a.length*100).toFixed(2)):null,profitFactor:gl?Number((gw/gl).toFixed(3)):null,netUsd:Number(a.reduce((v,x)=>v+x.netUsd,0).toFixed(2))};};
   const equity=closed.reduce((a,x)=>{a.push((a.at(-1)||0)+Number(x.netUsd||0));return a;},[] as number[]);
@@ -167,6 +177,7 @@ async function monitor(s:any,bar:Candle,lotOz:number,cost:number) {
     const move=p.direction==="BUY"?exit-p.entry:p.entry-exit,gross=move*lotOz,net=gross-cost;
     const row={...p,closedAt:now(),exit,exitReason:why,grossUsd:Number(gross.toFixed(2)),costUsd:cost,netUsd:Number(net.toFixed(2)),stressNetUsd:Number((gross-0.74).toFixed(2)),resultR:Number((move/Math.max(0.0001,p.risk)).toFixed(3))};
     s.closedTrades.push(row);s.daily.trades++;s.daily.netUsd+=row.netUsd;
+    s.candidateHistory.push({type:"SHADOW_OUTCOME",id:p.id,expert:p.expert,direction:p.direction,outcome:why,netUsd:row.netUsd,stressNetUsd:row.stressNetUsd,resultR:row.resultR});
     event(s,{type:"PAPER_CLOSE",id:p.id,expert:p.expert,direction:p.direction,exitReason:why,netUsd:row.netUsd,resultR:row.resultR});
     console.log("AI_PAPER_CLOSE",JSON.stringify({id:p.id,expert:p.expert,direction:p.direction,why,netUsd:row.netUsd,resultR:row.resultR}));
   }
@@ -220,42 +231,52 @@ async function runCycle(source="scheduled") {
     const report={at:now(),source,decision:"NO_NEW_BAR",reason:"BAR_ALREADY_PROCESSED",bar:last.time,openPositions:s.openPositions.length,kronos};
     s.lastCycleAt=now();s.lastReport=report;await writeState(s);return report;
   }
-  const generated=generateCandidates(bars,chartContext,mid,kronos,ref,s.closedTrades);
+  const regimeResult=classifyMarketRegime(bars.M5,s.lastReport?.regime||null);
+  const generated=generateCandidates(bars,chartContext,mid,kronos,ref,s.closedTrades,regimeResult);
+  const model=await loadMetaModel();
+  const adaptiveCandidates=selectAdaptiveExperts(generated.candidates,regimeResult);
+  for(const c of adaptiveCandidates) {
+    c.metaFeatures=buildMetaFeatures(c,regimeResult,quote.spread,generated.atr);
+    c.metaLabel=model?predictMetaLabel(model,c.metaFeatures):null;
+    c.metaEVUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-cost).toFixed(3)):null;
+  }
   const accepted:any[]=[],rejected:any[]=[];
-  for(const c of generated.candidates) {
-    const why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
+  for(const c of adaptiveCandidates) {
+    let why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
+    if(!why&&!model)why="META_MODEL_NOT_TRAINED_COLLECTING_LABELS";
+    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.metaLabel.pTarget<0.45))why="META_LABELER_LOW_EXPECTED_VALUE";
     if(why) {
       rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore});
-      s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why});
-      event(s,{type:"CANDIDATE_REJECTED",id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore});
+      s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz});
+      event(s,{type:"CANDIDATE_REJECTED",id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
       continue;
     }
-    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
+    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
     s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore});
-    event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore});
+    event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
     console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore}));
     if(s.openPositions.length>=4)break;
   }
-  for(const c of generated.candidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore,features:c.features,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
+  for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
   if(s.candidateHistory.length>2500)s.candidateHistory=s.candidateHistory.slice(-2500);
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
-    bar:last.time,regime:generated.regime,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
+    bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
     expertsEvaluated:["LIQUIDITY_SWEEP_RECLAIM","BREAKOUT_CONTINUATION","TREND_PULLBACK","RANGE_REJECTION","MOMENTUM_IMPULSE","GEMINI_VISION"],
-    candidatesGenerated:generated.candidates.length,accepted,rejected,openPositions:s.openPositions.length,shadowTracking:s.shadowPositions.length,
+    candidatesGenerated:adaptiveCandidates.length,expertsSelected:[...new Set(adaptiveCandidates.map(c=>c.expert))],accepted,rejected,openPositions:s.openPositions.length,shadowTracking:s.shadowPositions.length,
     kronos,referenceEngine:{status:engine.status,version:engine.engineVersion,plan:engine.plan?.decision||null,visionBlocked:engine.visionHealth?.entryBlocked??null},
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
-    metaLabeler:s.metaLabeler,liveTrading:false,
-    disclaimer:"PAPER only. QualityScore is a heuristic ranking, not a calibrated probability. Kronos is a forecast expert, not a probability model. XGBoost is not trained yet."};
+    metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},liveTrading:false,
+    disclaimer:model?"PAPER only. XGBoost probabilities are model estimates validated on a chronological holdout, not guarantees.":"PAPER only. No probability is fabricated: candidates are shadow-tracked until enough outcomes exist to train and validate XGBoost."};
   s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;
   await writeState(s);event(s,{type:"CYCLE",bar:last.time,decision:report.decision,candidates:generated.candidates.length,accepted:accepted.length,rejected:rejected.length,regime:generated.regime});
   console.log("AI_ENGINE_CYCLE",JSON.stringify(report));
   return report;
 }
 async function status() {
-  const s=await readState();
+  const s=await readState(); const model=await loadMetaModel();
   return {ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",liveTrading:false,lastCycleAt:s.lastCycleAt,lastProcessedBar:s.lastProcessedBar,
-    openPositions:s.openPositions,shadowTracking:s.shadowPositions.length,stats:stats(s.closedTrades),lastReport:s.lastReport,metaLabeler:s.metaLabeler,storage:"persistent-volume"};
+    openPositions:s.openPositions,shadowTracking:s.shadowPositions.length,stats:stats(s.closedTrades),lastReport:s.lastReport,metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},storage:"persistent-volume"};
 }
 let running=false;
 const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
