@@ -12,6 +12,8 @@ const URLS = {
   kronos: String(Bun.env.KRONOS_URL || "https://gold-market-api-production.up.railway.app").replace(/\/+$/,"")
 };
 const STATE_PATH = "/data/gold-ai-paper-state.json";
+const API_TOKEN = String(Bun.env.PAPER_API_TOKEN || "");
+const isAuthorized = (req:Request) => !!API_TOKEN && req.headers.get("authorization") === "Bearer " + API_TOKEN;
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const n = (x:any) => Number.isFinite(Number(x)) ? Number(x) : null;
 const sleep = (ms:number) => new Promise(r=>setTimeout(r,ms));
@@ -299,8 +301,12 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   if(req.method==="GET"&&(u.pathname==="/"||u.pathname==="/health"))return json({ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",liveTrading:false});
   if(req.method==="GET"&&u.pathname==="/status")try{return json(await status());}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
   if(req.method==="GET"&&u.pathname==="/analysis")try{const s=await readState();return json(s.lastReport||{decision:"NO_TRADE",reason:"NO_CYCLE_YET"});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
-  if(req.method==="GET"&&u.pathname==="/history")try{const s=await readState();return json({ok:true,events:s.events.slice(-120),candidates:s.candidateHistory.slice(-120),openPositions:s.openPositions,closedTrades:s.closedTrades.slice(-120),stats:stats(s.closedTrades)});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
-  if((req.method==="GET"||req.method==="POST")&&u.pathname==="/sync") {
+  if(req.method==="GET"&&u.pathname==="/history") {
+    if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
+    try{const s=await readState();return json({ok:true,events:s.events.slice(-120),candidates:s.candidateHistory.slice(-120),openPositions:s.openPositions,closedTrades:s.closedTrades.slice(-120),stats:stats(s.closedTrades)});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
+  }
+  if(req.method==="POST"&&u.pathname==="/sync") {
+    if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
     if(running)return json({ok:true,status:"ALREADY_RUNNING"},202);
     running=true;try{return json(await runCycle("manual"));}catch(e:any){return json({ok:false,error:String(e?.message||e)},502);}finally{running=false;}
   }
