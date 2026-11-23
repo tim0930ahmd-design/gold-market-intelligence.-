@@ -28,7 +28,7 @@ export function marketVector(bars:Bar[],regime:string,atTime?:string):number[]|n
 }
 function linearScore(model:any,x:number[]) {
  if(!model||!Array.isArray(model.weights)||model.weights.length!==x.length)return null;
- return sigmoid(Number(model.bias||0)+model.weights.reduce((s:number,w:number,i:number)=>s+Number(w||0)*x[i],0));
+ return sigmoid(Number(model.bias||0)+model.weights.reduce((s:number,w:number,i:number)=>{const z=(x[i]-Number(model.mean?.[i]||0))/Math.max(1e-9,Number(model.scale?.[i]||1));return s+Number(w||0)*z;},0));
 }
 export function discoverOpportunities(model:any,x:number[],entry:number,atrValue:number,barTime:string,regime:string) {
  if(!model||model.kind!=="gold-opportunity-linear-v1"||model.validated!==true)return {status:"MODEL_NOT_VALIDATED",candidates:[] as any[]};
@@ -48,7 +48,7 @@ export function predictScenarios(model:any,x:number[]) {
  for(const [h,classes] of Object.entries(model.horizons||{})) {
   const logits:any={};for(const side of ["UP","DOWN","RANGE"]) {
    const m=(classes as any)[side];if(!m||!Array.isArray(m.weights)||m.weights.length!==x.length)continue;
-   logits[side]=Number(m.bias||0)+m.weights.reduce((s:number,w:number,i:number)=>s+Number(w||0)*x[i],0);
+   logits[side]=Number(m.bias||0)+m.weights.reduce((s:number,w:number,i:number)=>{const z=(x[i]-Number(m.mean?.[i]||0))/Math.max(1e-9,Number(m.scale?.[i]||1));return s+Number(w||0)*z;},0);
   }
   if(Object.keys(logits).length!==3)continue;
   const mx=Math.max(...Object.values(logits) as number[]),ex:any={};for(const k of Object.keys(logits))ex[k]=Math.exp(clamp(logits[k]-mx,-30,30));
