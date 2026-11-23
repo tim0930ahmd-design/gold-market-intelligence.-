@@ -69,7 +69,7 @@ export function learnExpertWeights(closed:any[],regime:string) {
  return out;
 }
 export function applyExpertWeights(candidates:any[],weights:any) {
- return candidates.map(c=>{const w=weights[c.expert]?.weight??1;return {...c,metaLearningWeight:w,metaLearningScore:Number((c.qualityScore*w).toFixed(2));}).sort((a,b)=>b.metaLearningScore-a.metaLearningScore);
+ return candidates.map(c=>{const w=weights[c.expert]?.weight??1;return {...c,metaLearningWeight:w,metaLearningScore:Number((c.qualityScore*w).toFixed(2))};}).sort((a,b)=>b.metaLearningScore-a.metaLearningScore);
 }
 export function decisionIntelligence(c:any,prob:any,cost:number,lotOz:number,stressCost:number) {
  if(!prob)return {decision:"NO_TRADE",reason:"NO_VALIDATED_PROBABILITY_MODEL",evUsd:null,stressEvUsd:null};
