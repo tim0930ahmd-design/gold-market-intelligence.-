@@ -7,7 +7,7 @@ Status: implementation on the development branch only. PAPER only. Not deployed 
 ### 1) AI Opportunity Discovery
 - Builds a 24-value causal feature vector from completed M5 candles: multi-horizon returns, candle geometry, efficiency, volatility expansion/compression, range position, slopes and UTC session encoding.
 - Collects forward labels for BUY and SELL independently: first touch of +1.0 ATR target versus -0.75 ATR stop over the next 12 completed M5 bars. If neither barrier is reached, label TIMEOUT. If both are hit in one bar, STOP wins conservatively.
-- A separately trained binary model can propose AI_DISCOVERY candidates without requiring a hand-coded setup trigger.
+- A separately trained binary model can propose AI_DISCOVERY candidates without requiring a hand-coded setup trigger. TIMEOUT remains in training as a non-target outcome with zero gross payoff (costs still apply).
 - Runtime will ignore the discovery model unless its artifact has kind `gold-opportunity-linear-v1` and `validated: true`.
 
 ### 2) Scenario Prediction
