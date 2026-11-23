@@ -27,13 +27,13 @@ export function classifyMarketRegime(bars:Candle[],previousRegime?:string|null):
   return {regime,confidence:Number(confidence.toFixed(3)),changed:!!previousRegime&&previousRegime!==regime,features:{atr14:a14,atr50:a50,atrRatio,efficiency,bodyAtr:body,emaAlignment:alignment,slope,width}};
 }
 const EXPERTS:Record<string,string[]> = {
-  TREND_UP:["TREND_PULLBACK","BREAKOUT_CONTINUATION","MOMENTUM_IMPULSE","GEMINI_VISION"],
-  TREND_DOWN:["TREND_PULLBACK","BREAKOUT_CONTINUATION","MOMENTUM_IMPULSE","GEMINI_VISION"],
-  RANGE:["RANGE_REJECTION","LIQUIDITY_SWEEP_RECLAIM","GEMINI_VISION"],
-  COMPRESSION:["BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM"],
-  VOLATILITY_EXPANSION:["MOMENTUM_IMPULSE","BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM"],
-  IMPULSE:["MOMENTUM_IMPULSE","BREAKOUT_CONTINUATION","TREND_PULLBACK"],
-  TRANSITION:["LIQUIDITY_SWEEP_RECLAIM","RANGE_REJECTION","GEMINI_VISION"]
+  TREND_UP:["TREND_PULLBACK","TREND_CONTINUATION","BREAKOUT_RETEST","BREAKOUT_CONTINUATION","MOMENTUM_IMPULSE","GEMINI_VISION"],
+  TREND_DOWN:["TREND_PULLBACK","TREND_CONTINUATION","BREAKOUT_RETEST","BREAKOUT_CONTINUATION","MOMENTUM_IMPULSE","GEMINI_VISION"],
+  RANGE:["RANGE_REJECTION","LIQUIDITY_SWEEP_RECLAIM","REVERSAL","GEMINI_VISION"],
+  COMPRESSION:["BREAKOUT_RETEST","BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM"],
+  VOLATILITY_EXPANSION:["MOMENTUM_IMPULSE","BREAKOUT_CONTINUATION","BREAKOUT_RETEST","LIQUIDITY_SWEEP_RECLAIM"],
+  IMPULSE:["MOMENTUM_IMPULSE","TREND_CONTINUATION","BREAKOUT_CONTINUATION"],
+  TRANSITION:["LIQUIDITY_SWEEP_RECLAIM","RANGE_REJECTION","REVERSAL","GEMINI_VISION"]
 };
 export function selectAdaptiveExperts(candidates:any[],regime:RegimeResult) {
   const eligible=EXPERTS[regime.regime]||[];
@@ -46,14 +46,14 @@ export function selectAdaptiveExperts(candidates:any[],regime:RegimeResult) {
   const seen=new Set<string>();
   return ranked.filter(c=>{const k=c.expert+":"+c.direction;if(seen.has(k))return false;seen.add(k);return true;});
 }
-export const META_FEATURES=["qualityScore","stopAtr","rr","regimeConfidence","atrRatio","efficiency","bodyAtr","emaAlignment","slope","spreadAtr","isBuy","expertSweep","expertBreakout","expertPullback","expertRange","expertMomentum","expertVision","regimeTrend","regimeRange","regimeCompression","regimeExpansion","regimeImpulse"];
+export const META_FEATURES=["qualityScore","stopAtr","rr","regimeConfidence","atrRatio","efficiency","bodyAtr","emaAlignment","slope","spreadAtr","isBuy","expertSweep","expertBreakout","expertRetest","expertContinuation","expertReversal","expertPullback","expertRange","expertMomentum","expertVision","regimeTrend","regimeRange","regimeCompression","regimeExpansion","regimeImpulse"];
 export function buildMetaFeatures(c:any,regime:RegimeResult,spread:number|null,atrValue:number) {
   const f=c.features||{},e=c.expert||"",r=regime.regime;
   return [Number(c.qualityScore||0),Number(c.stopAtr||0),Number(c.rr||0),regime.confidence,
     Number(regime.features.atrRatio||1),Number(regime.features.efficiency||0),Number(f.bodyAtr||regime.features.bodyAtr||0),
     Number(regime.features.emaAlignment||0),Number(regime.features.slope||0),spread!==null&&atrValue>0?spread/atrValue:0,
-    c.direction==="BUY"?1:0,e.includes("SWEEP")?1:0,e.includes("BREAKOUT")?1:0,e.includes("PULLBACK")?1:0,
-    e.includes("RANGE")?1:0,e.includes("MOMENTUM")?1:0,e.includes("VISION")?1:0,
+    c.direction==="BUY"?1:0,e.includes("SWEEP")?1:0,e.includes("BREAKOUT")?1:0,e.includes("RETEST")?1:0,e.includes("CONTINUATION")?1:0,e.includes("REVERSAL")?1:0,
+    e.includes("PULLBACK")?1:0,e.includes("RANGE")?1:0,e.includes("MOMENTUM")?1:0,e.includes("VISION")?1:0,
     r.startsWith("TREND")?1:0,r==="RANGE"?1:0,r==="COMPRESSION"?1:0,r==="VOLATILITY_EXPANSION"?1:0,r==="IMPULSE"?1:0];
 }
 function walkTree(node:any,x:number[]):number {
