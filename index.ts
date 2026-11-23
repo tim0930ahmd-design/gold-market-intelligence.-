@@ -139,6 +139,7 @@ function stats(closed:any[]) {
   let peak=0,dd=0;for(const x of equity){peak=Math.max(peak,x);dd=Math.max(dd,peak-x);}
   return {...sum(closed),maxDrawdownUsd:Number(dd.toFixed(2)),BUY:sum(closed.filter(x=>x.direction==="BUY")),SELL:sum(closed.filter(x=>x.direction==="SELL")),byExpert:Object.fromEntries([...new Set(closed.map(x=>x.expert))].map(k=>[k,sum(closed.filter(x=>x.expert===k))]))};
 }
+function freshnessPlaceholder(chart:any){return chart?.freshness||null;}
 function resetDaily(s:any) {const d=now().slice(0,10);if(s.daily?.date!==d)s.daily={date:d,trades:0,netUsd:0};}
 function riskReason(c:Candidate,quote:any,a:number,s:any,cost:number,lotOz:number,maxRisk:number,dailyLimit:number) {
   const risk=Math.abs(c.entry-c.stopLoss),reward=Math.abs(c.target-c.entry),spread=n(quote.spread),spreadRatio=spread!==null?spread/a:null;
@@ -185,13 +186,18 @@ async function monitor(s:any,bar:Candle,lotOz:number,cost:number) {
   s.shadowPositions=shadows;
 }
 async function runCycle(source="scheduled") {
+  console.log("AI_CYCLE_BEGIN",JSON.stringify({source,at:now()}));
   const s=await readState();resetDaily(s);
-  const [market,chart,engine,trades]=await Promise.all([
-    getJson(URLS.bridge+"/market-data",{},22000),
-    getJson(URLS.chartLab+"/market-read?refresh=1",{},25000),
-    getJson(URLS.intelligence+"/playbook-status",{},15000).catch(e=>({ok:false,error:String(e)})),
-    getJson(URLS.intelligence+"/playbook-trades",{},15000).catch(e=>({ok:false,error:String(e)}))
-  ]);
+  console.log("AI_FETCH_BRIDGE_START",URLS.bridge);
+  const market=await getJson(URLS.bridge+"/market-data",{},15000);
+  console.log("AI_FETCH_BRIDGE_OK",JSON.stringify({ok:market.ok,keys:Object.keys(market||{}).slice(0,20)}));
+  console.log("AI_FETCH_CHART_START",URLS.chartLab);
+  const chart=await getJson(URLS.chartLab+"/market-read?refresh=1",{},18000);
+  console.log("AI_FETCH_CHART_OK",JSON.stringify({ok:chart.ok,frames:Object.keys(chart.frames||{}),freshness:chart.freshness||null}));
+  const engine=await getJson(URLS.intelligence+"/playbook-status",{},10000).catch(e=>({ok:false,error:String(e)}));
+  console.log("AI_FETCH_ENGINE",JSON.stringify({ok:engine.ok,scenarioCount:engine.scenarios?.length||0,version:engine.engineVersion||null}));
+  const trades=await getJson(URLS.intelligence+"/playbook-trades",{},10000).catch(e=>({ok:false,error:String(e)}));
+  console.log("AI_FETCH_TRADES",JSON.stringify({ok:trades.ok,overall:trades.overall||null}));
   if(!market.ok)throw new Error("BRIDGE_MARKET_DATA_NOT_OK");
   const bars=normalizeBars(market),quote={bid:n(market.bid),ask:n(market.ask),spread:n(market.spread)};
   const mid=quote.bid!==null&&quote.ask!==null?(quote.bid+quote.ask)/2:null,last=bars.M5.at(-1);
@@ -200,8 +206,10 @@ async function runCycle(source="scheduled") {
   const lotSize=n(Bun.env.PAPER_LOT_SIZE)??0.01,contract=n(Bun.env.CONTRACT_OZ_PER_LOT)??100,lotOz=lotSize*contract;
   const maxRisk=n(Bun.env.MAX_TRADE_RISK_USD)??2,dailyLimit=n(Bun.env.DAILY_LOSS_LIMIT_USD)??2;
   const kronos=await fetchKronos(bars);
+  console.log("AI_KRONOS_RESULT",JSON.stringify(kronos));
   const ref=engine.ok?engine:null;
   if(!last||bars.M5.length<30||!fresh||mid===null) {
+    console.log("AI_DATA_GATE",JSON.stringify({fresh,barCount:bars.M5.length,quote,chartFreshness:freshnessPlaceholder(chart)}));
     const report={at:now(),source,decision:"NO_TRADE",reason:!fresh?"STALE_OR_INVALID_MARKET_DATA":"INSUFFICIENT_M5_CANDLES",marketFresh:fresh,lastM5:last?.time||null,quote,kronos};
     s.lastCycleAt=now();s.lastReport=report;event(s,{type:"NO_TRADE",reason:report.reason});await writeState(s);return report;
   }
