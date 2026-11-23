@@ -11,7 +11,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, accuracy_score
 
 CLASSES = ("TARGET", "STOP", "TIMEOUT")
-FEATURES = None
+FEATURES = ["qualityScore","stopAtr","rr","regimeConfidence","atrRatio","efficiency","bodyAtr","emaAlignment","slope","spreadAtr","isBuy","expertSweep","expertBreakout","expertPullback","expertRange","expertMomentum","expertVision","regimeTrend","regimeRange","regimeCompression","regimeExpansion","regimeImpulse"]
 
 def load_rows(path):
     with open(path, "r", encoding="utf-8") as f: state=json.load(f)
