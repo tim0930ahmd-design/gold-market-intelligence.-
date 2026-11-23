@@ -27,7 +27,8 @@ export function marketVector(bars:Bar[],regime:string,atTime?:string):number[]|n
 }
 function linearScore(model:any,x:number[]) {
  if(!model||!Array.isArray(model.weights)||model.weights.length!==x.length)return null;
- return sigmoid(Number(model.bias||0)+model.weights.reduce((s:number,w:number,i:number)=>{const z=(x[i]-Number(model.mean?.[i]||0))/Math.max(1e-9,Number(model.scale?.[i]||1));return s+Number(w||0)*z;},0));
+ const raw=Number(model.bias||0)+model.weights.reduce((s:number,w:number,i:number)=>{const z=(x[i]-Number(model.mean?.[i]||0))/Math.max(1e-9,Number(model.scale?.[i]||1));return s+Number(w||0)*z;},0);
+ return sigmoid(raw*Number(model.plattA??1)+Number(model.plattB??0));
 }
 export function discoverOpportunities(model:any,x:number[],entry:number,atrValue:number,barTime:string,regime:string) {
  if(!model||model.kind!=="gold-opportunity-linear-v1"||model.validated!==true)return {status:"MODEL_NOT_VALIDATED",candidates:[] as any[]};
