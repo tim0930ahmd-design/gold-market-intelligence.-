@@ -125,12 +125,11 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
   return {candidates:out.sort((a,b)=>b.qualityScore-a.qualityScore),bar:last,atr:a,regime,h1Bias:h1b,m15Bias:m15b};
 }
 async function fetchKronos(bars:any) {
-  const key=Bun.env.KRONOS_API_KEY,m5=bars.M5||[];
-  if(!key||m5.length<100)return {status:"UNAVAILABLE",reason:!key?"NO_API_KEY":"INSUFFICIENT_CANDLES"};
+  const m5=bars.M5||[];
+  if(m5.length<100)return {status:"UNAVAILABLE",reason:"INSUFFICIENT_CANDLES"};
   try {
-    const url=URLS.kronos.endsWith("/forecast")?URLS.kronos:URLS.kronos+"/forecast";
-    const r=await getJson(url,{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+key},body:JSON.stringify({timeframe:"M5",candles:m5.slice(-200),pred_len:12,sample_count:1})},45000);
-    return {status:"AVAILABLE",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed};
+    const r=await getJson(URLS.chartLab+"/kronos-forecast",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({timeframe:"M5",candles:m5.slice(-200),pred_len:12,sample_count:1})},50000);
+    return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
 function stats(closed:any[]) {
@@ -193,7 +192,10 @@ async function runCycle(source="scheduled") {
   console.log("AI_FETCH_BRIDGE_OK",JSON.stringify({ok:market.ok,keys:Object.keys(market||{}).slice(0,20)}));
   console.log("AI_FETCH_CHART_START",URLS.chartLab);
   const chart=await getJson(URLS.chartLab+"/market-read?refresh=1",{},18000);
-  console.log("AI_FETCH_CHART_OK",JSON.stringify({ok:chart.ok,frames:Object.keys(chart.frames||{}),freshness:chart.freshness||null}));
+  console.log("AI_FETCH_CHART_OK",JSON.stringify({ok:chart.ok,timeframes:Object.keys(chart.timeframes||{}),freshness:chart.freshness||null}));
+  const levels=await getJson(URLS.chartLab+"/levels?refresh=1",{},18000);
+  console.log("AI_FETCH_LEVELS_OK",JSON.stringify({ok:levels.ok,frames:Object.keys(levels.frames||{})}));
+  const chartContext={...chart,frames:levels.frames||{}};
   const engine=await getJson(URLS.intelligence+"/playbook-status",{},10000).catch(e=>({ok:false,error:String(e)}));
   console.log("AI_FETCH_ENGINE",JSON.stringify({ok:engine.ok,scenarioCount:engine.scenarios?.length||0,version:engine.engineVersion||null}));
   const trades=await getJson(URLS.intelligence+"/playbook-trades",{},10000).catch(e=>({ok:false,error:String(e)}));
@@ -218,7 +220,7 @@ async function runCycle(source="scheduled") {
     const report={at:now(),source,decision:"NO_NEW_BAR",reason:"BAR_ALREADY_PROCESSED",bar:last.time,openPositions:s.openPositions.length,kronos};
     s.lastCycleAt=now();s.lastReport=report;await writeState(s);return report;
   }
-  const generated=generateCandidates(bars,chart,mid,kronos,ref,s.closedTrades);
+  const generated=generateCandidates(bars,chartContext,mid,kronos,ref,s.closedTrades);
   const accepted:any[]=[],rejected:any[]=[];
   for(const c of generated.candidates) {
     const why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
