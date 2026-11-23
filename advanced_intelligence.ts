@@ -17,7 +17,6 @@ export function marketVector(bars:Bar[],regime:string,atTime?:string):number[]|n
  const c=b.map(x=>x.close),last=b.at(-1)!,a=atr(b,14),a50=atr(b,50)||a;
  if(!a||!a50)return null;
  const ret=(k:number)=>c.at(-1)!/c.at(-1-k)!-1;
- const path=(k:number)=>b.slice(-k+1).reduce((s,x,i)=>s+Math.abs(x.close-b.slice(-k+1)[i-1]?.close||0),0);
  const eff=(k:number)=>{const p=b.slice(-k);const travel=p.slice(1).reduce((s,x,i)=>s+Math.abs(x.close-p[i].close),0);return travel?Math.abs(p.at(-1)!.close-p[0].close)/travel:0;};
  const hi=Math.max(...b.slice(-20).map(x=>x.high)),lo=Math.min(...b.slice(-20).map(x=>x.low));
  const body=Math.abs(last.close-last.open),upper=last.high-Math.max(last.open,last.close),lower=Math.min(last.open,last.close)-last.low;
