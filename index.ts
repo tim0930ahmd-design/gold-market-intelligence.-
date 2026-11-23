@@ -1,5 +1,3 @@
-import { S3Client } from "bun";
-
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
@@ -11,15 +9,7 @@ const URLS = {
   chartLab: String(Bun.env.CHART_LAB_URL || "https://gold-chart-lab-production.up.railway.app").replace(/\/+$/,""),
   kronos: String(Bun.env.KRONOS_URL || "https://gold-market-api-production.up.railway.app").replace(/\/+$/,"")
 };
-const BUCKET = Bun.env.S3_BUCKET || "";
-const STATE_KEY = "gold-ai-paper/state.json";
-const S3 = new S3Client({
-  bucket: BUCKET,
-  endpoint: Bun.env.S3_ENDPOINT,
-  accessKeyId: Bun.env.S3_ACCESS_KEY_ID || "",
-  secretAccessKey: Bun.env.S3_SECRET_ACCESS_KEY || "",
-  virtualHostedStyle: true
-});
+const STATE_PATH = "/data/gold-ai-paper-state.json";
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const n = (x:any) => Number.isFinite(Number(x)) ? Number(x) : null;
 const sleep = (ms:number) => new Promise(r=>setTimeout(r,ms));
@@ -33,16 +23,14 @@ function freshState() {
     metaLabeler:{status:"COLLECTING_LABELS",trained:false,model:null,note:"No trained XGBoost model is claimed. Candidate features and outcomes are being collected."} };
 }
 async function readState() {
-  if(!BUCKET || !Bun.env.S3_ENDPOINT || !Bun.env.S3_ACCESS_KEY_ID || !Bun.env.S3_SECRET_ACCESS_KEY) throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
-  console.log("AI_ENGINE_S3_CONFIG",JSON.stringify({bucket:BUCKET,endpoint:Bun.env.S3_ENDPOINT,accessKeyPresent:!!Bun.env.S3_ACCESS_KEY_ID,secretPresent:!!Bun.env.S3_SECRET_ACCESS_KEY,accessKeyLength:String(Bun.env.S3_ACCESS_KEY_ID||"").length,secretLength:String(Bun.env.S3_SECRET_ACCESS_KEY||"").length}));
-  const file = S3.file(STATE_KEY);
-  if(!await file.exists()) { console.log("AI_ENGINE_S3_STATE_MISSING"); return freshState(); }
+  const file = Bun.file(STATE_PATH);
+  if(!await file.exists()) { console.log("AI_ENGINE_STATE_FILE_MISSING",STATE_PATH); return freshState(); }
   const x = await file.json();
   return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[]};
 }
 async function writeState(s:any) {
   s.updatedAt=now();
-  await S3.file(STATE_KEY).write(JSON.stringify(s),{type:"application/json"});
+  await Bun.write(STATE_PATH,JSON.stringify(s));
 }
 function event(s:any,x:any) { s.events.push({at:now(),...x}); if(s.events.length>1000)s.events=s.events.slice(-1000); }
 async function getJson(url:string, options:any={}, timeout=18000) {
@@ -257,7 +245,7 @@ async function runCycle(source="scheduled") {
 async function status() {
   const s=await readState();
   return {ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",liveTrading:false,lastCycleAt:s.lastCycleAt,lastProcessedBar:s.lastProcessedBar,
-    openPositions:s.openPositions,shadowTracking:s.shadowPositions.length,stats:stats(s.closedTrades),lastReport:s.lastReport,metaLabeler:s.metaLabeler,storage:"persistent-object-storage"};
+    openPositions:s.openPositions,shadowTracking:s.shadowPositions.length,stats:stats(s.closedTrades),lastReport:s.lastReport,metaLabeler:s.metaLabeler,storage:"persistent-volume"};
 }
 let running=false;
 const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
@@ -272,5 +260,5 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   }
   return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/history","/sync"]},404);
 }});
-console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,mode:"PAPER_ONLY",storage:!!BUCKET,urls:URLS}));
+console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,mode:"PAPER_ONLY",storage:"persistent-volume",urls:URLS}));
 void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",JSON.stringify({message:String(e?.message||e),name:e?.name||null,code:e?.code||null,stack:String(e?.stack||"").slice(0,900)}));}finally{running=false;}}await sleep(300000);}})();
