@@ -1,14 +1,11 @@
 {
   "name": "gold-ai-intelligence-paper",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
     "test": "bun test"
-  },
-  "dependencies": {
-    "@aws-sdk/client-s3": "latest"
   },
   "packageManager": "bun@1.4.4"
 }
