@@ -12,9 +12,9 @@ The 2025 training-period candidate ledger contained 30,283 opportunities; the Se
 
 | Sample | Trades | Win rate | PF @ $0.37 | Net @ $0.37 | PF @ $0.74 | Net @ $0.74 |
 |---|---:|---:|---:|---:|---:|---:|
-| 2025, all candidates (overlapping diagnostic) | 30,283 | 35.74% | 0.588 | -$11,315.85 | 0.352 | -$22,? |
+| 2025, all candidates (overlapping diagnostic) | 30,283 | 35.74% | 0.588 | -$11,315.85 | 0.351 | -$22,520.56 |
 | 2025, sequential one-position portfolio | 22,335 | 35.58% | 0.586 | -$8,505.09 | 0.352 | -$16,769.04 |
-| Sep 2026, all candidates (overlapping diagnostic) | 2,497 | 33.56% | 0.612 | -$1,138.34 | 0.407 | -$1,? |
+| Sep 2026, all candidates (overlapping diagnostic) | 2,497 | 33.56% | 0.612 | -$1,138.34 | 0.419 | -$2,062.23 |
 | Sep 2026, sequential one-position portfolio | 1,924 | 32.90% | 0.593 | -$934.09 | 0.407 | -$1,645.97 |
 
 The BUY/SELL split on the held-out September sample was also negative:
