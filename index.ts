@@ -16,10 +16,9 @@ const STATE_KEY = "gold-ai-paper/state.json";
 const S3 = new S3Client({
   bucket: BUCKET,
   endpoint: Bun.env.S3_ENDPOINT,
-  region: Bun.env.S3_REGION || "auto",
   accessKeyId: Bun.env.S3_ACCESS_KEY_ID || "",
   secretAccessKey: Bun.env.S3_SECRET_ACCESS_KEY || "",
-  virtualHostedStyle: Bun.env.S3_URL_STYLE === "virtual-host"
+  virtualHostedStyle: true
 });
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const n = (x:any) => Number.isFinite(Number(x)) ? Number(x) : null;
@@ -35,8 +34,9 @@ function freshState() {
 }
 async function readState() {
   if(!BUCKET || !Bun.env.S3_ENDPOINT || !Bun.env.S3_ACCESS_KEY_ID || !Bun.env.S3_SECRET_ACCESS_KEY) throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
+  console.log("AI_ENGINE_S3_CONFIG",JSON.stringify({bucket:BUCKET,endpoint:Bun.env.S3_ENDPOINT,accessKeyPresent:!!Bun.env.S3_ACCESS_KEY_ID,secretPresent:!!Bun.env.S3_SECRET_ACCESS_KEY,accessKeyLength:String(Bun.env.S3_ACCESS_KEY_ID||"").length,secretLength:String(Bun.env.S3_SECRET_ACCESS_KEY||"").length}));
   const file = S3.file(STATE_KEY);
-  if(!await file.exists()) return freshState();
+  if(!await file.exists()) { console.log("AI_ENGINE_S3_STATE_MISSING"); return freshState(); }
   const x = await file.json();
   return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[]};
 }
@@ -273,4 +273,4 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/history","/sync"]},404);
 }});
 console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,mode:"PAPER_ONLY",storage:!!BUCKET,urls:URLS}));
-void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",String(e?.message||e));}finally{running=false;}}await sleep(300000);}})();
+void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",JSON.stringify({message:String(e?.message||e),name:e?.name||null,code:e?.code||null,stack:String(e?.stack||"").slice(0,900)}));}finally{running=false;}}await sleep(300000);}})();
