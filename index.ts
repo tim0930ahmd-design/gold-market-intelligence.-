@@ -101,4 +101,4 @@ const server=Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async
   if(req.method==="GET"&&url.pathname==="/analyze") return json(snapshot.analysis||{decision:"NO_TRADE",reason:"Run GET /sync first."});
   return json({error:"not_found",available:["/health","/status","/sync","/analysis","/reference","/candles","/analyze"]},404);
 }});
-console.log("Gold AI PAPER integration listening on "+server.url);
+console.log("Gold AI PAPER integration listening on "+server.url);\nvoid syncAll().then(()=>console.log("INTEGRATION_SYNC_OK",snapshot.syncedAt,JSON.stringify(snapshot.errors))).catch(e=>console.log("INTEGRATION_SYNC_ERROR",String(e)));\nsetInterval(()=>{void syncAll().then(()=>console.log("INTEGRATION_SYNC_OK",snapshot.syncedAt,JSON.stringify(snapshot.errors))).catch(e=>console.log("INTEGRATION_SYNC_ERROR",String(e)));},300000);
