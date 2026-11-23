@@ -94,7 +94,7 @@ def main():
         r=fit_binary(rows,side,args.cost,args.stress_cost,args.lot_oz);result["discovery"][side]={k:v for k,v in r.items() if k!="artifact"}
         if r.get("validated"):discovery_models[side]=r["artifact"]
     if len(discovery_models)==2:
-        artifact={"kind":"gold-opportunity-linear-v1","modelVersion":"gold-opportunity-1.0","validated":True,"sides":discovery_models,"thresholds":{s:fit_binary(rows,s,args.cost,args.stress_cost,args.lot_oz)["threshold"] for s in ("BUY","SELL")},"stopAtr":1.0,"rewardRisk":1.0,"label":"first-touch target +1 ATR before stop -0.75 ATR within 12 M5 bars"}
+        artifact={"kind":"gold-opportunity-linear-v1","modelVersion":"gold-opportunity-1.0","validated":True,"sides":discovery_models,"thresholds":{s:fit_binary(rows,s,args.cost,args.stress_cost,args.lot_oz)["threshold"] for s in ("BUY","SELL")},"stopAtr":0.75,"rewardRisk":1.3333333333,"label":"first-touch target +1 ATR before stop -0.75 ATR within 12 M5 bars"}
         path=os.path.join(args.out_dir,"gold-ai-opportunity-model.json");tmp=path+".tmp"
         with open(tmp,"w",encoding="utf-8") as f:json.dump(artifact,f,separators=(",",":"))
         os.replace(tmp,path);result["opportunityArtifact"]=path
