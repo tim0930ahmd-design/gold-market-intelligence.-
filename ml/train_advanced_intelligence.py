@@ -28,8 +28,12 @@ def fit_binary(rows,side,cost,stress_cost,lot_oz):
     if len(np.unique(y))<2 or len(np.unique(yc))<2 or len(np.unique(yt))<2:return {"status":"MISSING_CLASS_IN_SPLIT","samples":len(rows)}
     scaler=StandardScaler().fit(X); model=LogisticRegression(C=.25,max_iter=1500,class_weight="balanced",random_state=17)
     model.fit(scaler.transform(X),y)
-    pc=model.predict_proba(scaler.transform(Xc))[:,1]
-    pt=model.predict_proba(scaler.transform(Xt))[:,1]
+    cal_margins=model.decision_function(scaler.transform(Xc))
+    calibrator=LogisticRegression(C=1e6,solver="lbfgs",max_iter=1000)
+    calibrator.fit(cal_margins.reshape(-1,1),yc)
+    test_margins=model.decision_function(scaler.transform(Xt))
+    pc=calibrator.predict_proba(cal_margins.reshape(-1,1))[:,1]
+    pt=calibrator.predict_proba(test_margins.reshape(-1,1))[:,1]
     brier=float(brier_score_loss(yt,pt)); base=float(brier_score_loss(yt,np.full(len(yt),yt.mean())))
     # Select a probability threshold on the middle chronological slice only.
     thresholds=np.arange(.50,.901,.025); choices=[]
@@ -56,7 +60,7 @@ def fit_binary(rows,side,cost,stress_cost,lot_oz):
     stress_gain=stress_net[stress_net>0].sum(); stress_loss=np.abs(stress_net[stress_net<0]).sum()
     stress_pf=float(stress_gain/stress_loss) if stress_loss>0 else 0
     passed=(brier<=base*.98 and len(ix)>=30 and net.sum()>0 and stress_net.sum()>0 and pf>=1.25 and stress_pf>1.0)
-    artifact={"weights":model.coef_[0].tolist(),"bias":float(model.intercept_[0]),"mean":scaler.mean_.tolist(),"scale":scaler.scale_.tolist()}
+    artifact={"weights":model.coef_[0].tolist(),"bias":float(model.intercept_[0]),"mean":scaler.mean_.tolist(),"scale":scaler.scale_.tolist(),"plattA":float(calibrator.coef_[0][0]),"plattB":float(calibrator.intercept_[0])}
     return {"status":"VALIDATED" if passed else "HOLDOUT_GATE_FAILED","validated":passed,"samples":len(rows),"train":len(tr),"calibration":len(cal),"test":len(te),"brier":brier,"baseBrier":base,"threshold":threshold,"testTrades":len(ix),"testNetUsd":float(net.sum()),"testPF":pf,"stressNetUsd":float(stress_net.sum()),"stressPF":stress_pf,"artifact":artifact if passed else None}
 
 def fit_scenarios(rows,horizon):
