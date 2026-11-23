@@ -36,7 +36,7 @@ export function discoverOpportunities(model:any,x:number[],entry:number,atrValue
  for(const side of ["BUY","SELL"]) {
   const m=model.sides?.[side],p=m?linearScore(m,x):null;
   if(p===null||p<Number(model.thresholds?.[side]??1.01))continue;
-  const stopDistance=clamp(Number(model.stopAtr||1)*atrValue,0.25*atrValue,2.5*atrValue);
+  const stopDistance=clamp(Number(model.stopAtr||0.75)*atrValue,0.25*atrValue,2.5*atrValue);
   const stop=side==="BUY"?entry-stopDistance:entry+stopDistance,target=side==="BUY"?entry+stopDistance*Number(model.rewardRisk||1.8):entry-stopDistance*Number(model.rewardRisk||1.8);
   out.push({id:[barTime,"AI_DISCOVERY",side].join("|"),expert:"AI_DISCOVERY",direction:side,entry,stopLoss:Number(stop.toFixed(2)),target:Number(target.toFixed(2)),risk:Number(stopDistance.toFixed(3)),rr:Number(model.rewardRisk||1.8),stopAtr:Number((stopDistance/atrValue).toFixed(2)),qualityScore:Number((p*100).toFixed(1)),barTime,regime,features:{discoveryProbability:p,modelVersion:model.modelVersion},discoveryProbability:p,discoveryModelVersion:model.modelVersion});
  }
@@ -88,7 +88,7 @@ export function collectForwardLabels(state:any,bars:Bar[],regime:string,barTime:
  if(current<0||current<30)return {added:0,resolved:0,pending:state.aiLearningPending.length,samples:state.aiLearningSamples.length};
  let resolved=0;const keep:any[]=[];
  for(const p of state.aiLearningPending) {
-  const idx=bars.findIndex(b=>b.time===p.barTime),age=idx<0?999:current-idx;
+  const idx=bars.findIndex(b=>b.time===p.barTime);if(idx<0)continue;const age=current-idx;
   if(age<12){keep.push(p);continue;}
   const future=bars.slice(idx+1,idx+13),outcomes:any={};
   for(const h of [3,6,12]) {
@@ -108,7 +108,7 @@ export function collectForwardLabels(state:any,bars:Bar[],regime:string,barTime:
    }
    discovery[side]=label;
   }
-  state.aiLearningSamples.push({barTime:p.barTime,features:p.features,regime:p.regime,discovery,scenarios:outcomes});
+  state.aiLearningSamples.push({barTime:p.barTime,entry:p.entry,atr:p.atr,features:p.features,regime:p.regime,discovery,scenarios:outcomes});
   resolved++;
  }
  state.aiLearningPending=keep;
