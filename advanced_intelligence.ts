@@ -79,3 +79,45 @@ export function decisionIntelligence(c:any,prob:any,cost:number,lotOz:number,str
  const ev=pT*reward-pS*risk-cost,stress=pT*reward-pS*risk-stressCost;
  return {decision:ev>0&&stress>0?"PAPER_ELIGIBLE":"NO_TRADE",reason:ev>0&&stress>0?"POSITIVE_EV_BASE_AND_STRESS":"NON_POSITIVE_EXPECTED_VALUE",evUsd:Number(ev.toFixed(3)),stressEvUsd:Number(stress.toFixed(3)),pTarget:pT,pStop:pS,pTimeout:pX};
 }
+
+/** Resolve strictly forward-only labels and append the current completed-bar snapshot. */
+export function collectForwardLabels(state:any,bars:Bar[],regime:string,barTime:string) {
+ state.aiLearningPending=Array.isArray(state.aiLearningPending)?state.aiLearningPending:[];
+ state.aiLearningSamples=Array.isArray(state.aiLearningSamples)?state.aiLearningSamples:[];
+ const current=bars.findIndex(b=>b.time===barTime);
+ if(current<0||current<30)return {added:0,resolved:0,pending:state.aiLearningPending.length,samples:state.aiLearningSamples.length};
+ let resolved=0;const keep:any[]=[];
+ for(const p of state.aiLearningPending) {
+  const idx=bars.findIndex(b=>b.time===p.barTime),age=idx<0?999:current-idx;
+  if(age<12){keep.push(p);continue;}
+  const future=bars.slice(idx+1,idx+13),outcomes:any={};
+  for(const h of [3,6,12]) {
+   const end=bars[idx+h];if(!end)continue;
+   const move=(end.close-p.entry)/p.atr;
+   outcomes[String(h)]=move>0.35?"UP":move< -0.35?"DOWN":"RANGE";
+  }
+  const discovery:any={};
+  for(const side of ["BUY","SELL"]) {
+   const target=side==="BUY"?p.entry+p.atr: p.entry-p.atr;
+   const stop=side==="BUY"?p.entry-p.atr*0.75:p.entry+p.atr*0.75;
+   let label="TIMEOUT";
+   for(const b of future) {
+    const hitStop=side==="BUY"?b.low<=stop:b.high>=stop;
+    const hitTarget=side==="BUY"?b.high>=target:b.low<=target;
+    if(hitStop){label="STOP";break;} if(hitTarget){label="TARGET";break;}
+   }
+   discovery[side]=label;
+  }
+  state.aiLearningSamples.push({barTime:p.barTime,features:p.features,regime:p.regime,discovery,scenarios:outcomes});
+  resolved++;
+ }
+ state.aiLearningPending=keep;
+ let added=0;
+ if(!state.aiLearningPending.some((p:any)=>p.barTime===barTime)) {
+  const x=marketVector(bars,regime,barTime),a=atr(bars,14),entry=bars[current].close;
+  if(x&&a>0){state.aiLearningPending.push({barTime,entry,atr:a,features:x,regime});added++;}
+ }
+ if(state.aiLearningPending.length>500)state.aiLearningPending=state.aiLearningPending.slice(-500);
+ if(state.aiLearningSamples.length>12000)state.aiLearningSamples=state.aiLearningSamples.slice(-12000);
+ return {added,resolved,pending:state.aiLearningPending.length,samples:state.aiLearningSamples.length};
+}
