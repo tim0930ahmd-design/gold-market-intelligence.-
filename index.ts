@@ -239,25 +239,26 @@ async function runCycle(source="scheduled") {
     c.metaFeatures=buildMetaFeatures(c,regimeResult,quote.spread,generated.atr);
     c.metaLabel=model?predictMetaLabel(model,c.metaFeatures):null;
     c.metaEVUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-cost).toFixed(3)):null;
+    c.metaEVStressUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-stress).toFixed(3)):null;
   }
   const accepted:any[]=[],rejected:any[]=[];
   for(const c of adaptiveCandidates) {
     let why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
     if(!why&&!model)why="META_MODEL_NOT_TRAINED_COLLECTING_LABELS";
-    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.metaLabel.pTarget<0.45))why="META_LABELER_LOW_EXPECTED_VALUE";
+    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0))why="META_LABELER_LOW_EXPECTED_VALUE";
     if(why) {
-      rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore});
+      rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
       s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz});
-      event(s,{type:"CANDIDATE_REJECTED",id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
+      event(s,{type:"CANDIDATE_REJECTED",id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
       continue;
     }
-    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
+    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
     s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore});
     event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
     console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore}));
     if(s.openPositions.length>=4)break;
   }
-  for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
+  for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
   if(s.candidateHistory.length>2500)s.candidateHistory=s.candidateHistory.slice(-2500);
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
   const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
