@@ -22,17 +22,17 @@ The BUY/SELL split on the held-out September sample was also negative:
 - SELL: 1,296 candidates, 35.42% wins, PF 0.661 at $0.37; PF 0.451 at $0.74.
 
 ## XGBoost meta-label experiment
-Three one-vs-rest XGBoost classifiers (TARGET, STOP, TIMEOUT) were trained on the first 80% of 2025 candidates and calibrated on the final 20% of 2025 only. September 2026 was kept separate as external OOS.
+Three one-vs-rest XGBoost classifiers (TARGET, STOP, TIMEOUT) were trained on the first 70% of 2025 candidates, calibrated on the next 15%, and evaluated on the final untouched 15%. September 2026 was kept separate as external OOS.
 
 | Class | 2025 chronological validation AUC | 2025 validation Brier | Base-rate Brier | Sep 2026 OOS AUC |
 |---|---:|---:|---:|---:|
-| TARGET | 0.507 | 0.226135 | 0.226196 | 0.519 |
-| STOP | 0.505 | 0.226490 | 0.226552 | 0.523 |
-| TIMEOUT | 0.533 | 0.001154 | 0.001154 | 0.679* |
+| TARGET | 0.503 | 0.227075 | 0.227032 | 0.505 |
+| STOP | 0.498 | 0.227512 | 0.227431 | 0.512 |
+| TIMEOUT | 0.567 | 0.001320 | 0.001319 | 0.547* |
 
 *September contained only two TIMEOUT labels; that AUC is not decision-grade.
 
-Validation Brier scores improved by only a negligible amount over the base-rate predictor (far below the 2% improvement gate). On the held-out September sample, Brier scores were marginally worse than the base-rate predictor. The calibrated model produced zero positive-EV candidates out of 2,497 at the $0.37 base cost.
+Validation Brier scores were slightly worse than the base-rate predictor, so the model failed the 2% improvement gate. On the held-out September sample, Brier scores were also worse than the base-rate predictor. The calibrated model produced zero positive-EV candidates out of 2,497 at the $0.37 base cost.
 
 ## Decision
 **REJECT as a tradable edge. Do not deploy a trained model from this experiment.** The trigger/label setup and current feature set do not produce a useful predictive edge. This does not prove that all market-intelligence architectures fail; it means this specific first-pass expert/label construction failed the validation gate.
