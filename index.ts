@@ -1,4 +1,4 @@
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client } from "bun";
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
@@ -14,10 +14,12 @@ const URLS = {
 const BUCKET = Bun.env.S3_BUCKET || "";
 const STATE_KEY = "gold-ai-paper/state.json";
 const S3 = new S3Client({
+  bucket: BUCKET,
   endpoint: Bun.env.S3_ENDPOINT,
   region: Bun.env.S3_REGION || "auto",
-  credentials: { accessKeyId: Bun.env.S3_ACCESS_KEY_ID || "", secretAccessKey: Bun.env.S3_SECRET_ACCESS_KEY || "" },
-  forcePathStyle: Bun.env.S3_URL_STYLE === "path"
+  accessKeyId: Bun.env.S3_ACCESS_KEY_ID || "",
+  secretAccessKey: Bun.env.S3_SECRET_ACCESS_KEY || "",
+  virtualHostedStyle: Bun.env.S3_URL_STYLE === "virtual-host"
 });
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const n = (x:any) => Number.isFinite(Number(x)) ? Number(x) : null;
@@ -33,18 +35,14 @@ function freshState() {
 }
 async function readState() {
   if(!BUCKET || !Bun.env.S3_ENDPOINT || !Bun.env.S3_ACCESS_KEY_ID || !Bun.env.S3_SECRET_ACCESS_KEY) throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
-  try {
-    const r:any=await S3.send(new GetObjectCommand({Bucket:BUCKET,Key:STATE_KEY}));
-    const x=JSON.parse(await r.Body.transformToString());
-    return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[]};
-  } catch(e:any) {
-    if(/NoSuchKey|NotFound|404/i.test(String(e?.name||e?.Code||e?.message||e))) return freshState();
-    throw e;
-  }
+  const file = S3.file(STATE_KEY);
+  if(!await file.exists()) return freshState();
+  const x = await file.json();
+  return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[]};
 }
 async function writeState(s:any) {
   s.updatedAt=now();
-  await S3.send(new PutObjectCommand({Bucket:BUCKET,Key:STATE_KEY,Body:JSON.stringify(s),ContentType:"application/json"}));
+  await S3.file(STATE_KEY).write(JSON.stringify(s),{type:"application/json"});
 }
 function event(s:any,x:any) { s.events.push({at:now(),...x}); if(s.events.length>1000)s.events=s.events.slice(-1000); }
 async function getJson(url:string, options:any={}, timeout=18000) {
