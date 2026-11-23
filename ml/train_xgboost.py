@@ -41,23 +41,28 @@ def main():
     report={"status":"INSUFFICIENT_LABELS","samples":len(rows),"classCounts":counts,"requiredTotal":240,"requiredPerClass":30}
     if len(rows)<240 or min(counts.values())<30:
         print(json.dumps(report)); return 2
-    X=np.vstack([r[1] for r in rows]); y=np.asarray([r[2] for r in rows]); split=int(len(rows)*0.8)
-    Xtr,Xv,ytr,yv=X[:split],X[split:],y[:split],y[split:]
-    if min(sum(ytr==k) for k in CLASSES)<20 or min(sum(yv==k) for k in CLASSES)<8:
-        report.update(status="INSUFFICIENT_WALK_FORWARD_CLASS_COVERAGE",train=len(ytr),validation=len(yv))
+    X=np.vstack([r[1] for r in rows]); y=np.asarray([r[2] for r in rows])
+    train_end=int(len(rows)*0.70); calibration_end=int(len(rows)*0.85)
+    Xtr,Xcal,Xv=X[:train_end],X[train_end:calibration_end],X[calibration_end:]
+    ytr,ycal,yv=y[:train_end],y[train_end:calibration_end],y[calibration_end:]
+    if (min(sum(ytr==k) for k in CLASSES)<20 or
+        min(sum(ycal==k) for k in CLASSES)<8 or
+        min(sum(yv==k) for k in CLASSES)<8):
+        report.update(status="INSUFFICIENT_WALK_FORWARD_CLASS_COVERAGE",train=len(ytr),calibration=len(ycal),validation=len(yv))
         print(json.dumps(report)); return 2
     models={}; metrics={}
     for cls in CLASSES:
-        yt=(ytr==cls).astype(int); yval=(yv==cls).astype(int)
+        yt=(ytr==cls).astype(int); ycal=(ycal==cls).astype(int); yval=(yv==cls).astype(int)
         model=XGBClassifier(n_estimators=120,max_depth=3,learning_rate=0.04,
             subsample=0.8,colsample_bytree=0.9,min_child_weight=8,reg_lambda=4,
             objective="binary:logistic",eval_metric="logloss",base_score=0.5,
             n_jobs=1,random_state=17)
         model.fit(Xtr,yt,verbose=False)
-        margins=model.get_booster().predict(__import__("xgboost").DMatrix(Xv),output_margin=True)
-        # Platt calibration is fitted only on the chronological validation slice.
+        cal_margins=model.get_booster().predict(__import__("xgboost").DMatrix(Xcal),output_margin=True)
+        # Fit calibration on the middle chronological slice; evaluate on a later untouched slice.
         calibrator=LogisticRegression(C=1e6,solver="lbfgs")
-        calibrator.fit(margins.reshape(-1,1),yval)
+        calibrator.fit(cal_margins.reshape(-1,1),ycal)
+        margins=model.get_booster().predict(__import__("xgboost").DMatrix(Xv),output_margin=True)
         calibrated=calibrator.predict_proba(margins.reshape(-1,1))[:,1]
         brier=float(brier_score_loss(yval,calibrated))
         baseline=float(brier_score_loss(yval,np.full(len(yval),yval.mean())))
@@ -73,7 +78,7 @@ def main():
             "plattB":float(calibrator.intercept_[0]),"trees":dump}
     artifact={"kind":"xgboost-one-vs-rest-v1","modelVersion":"gold-meta-xgb-1.0",
         "trainedAt":datetime.now(timezone.utc).isoformat(),"featureNames":FEATURES,
-        "featureCount":int(X.shape[1]),"trainSamples":len(ytr),"validationSamples":len(yv),
+        "featureCount":int(X.shape[1]),"trainSamples":len(ytr),"calibrationSamples":len(ycal),"validationSamples":len(yv),
         "classCounts":counts,"walkForwardMetrics":metrics,"models":models,
         "labelDefinition":"first barrier reached on M5 bars: TARGET, STOP, or TIMEOUT; labels use shadow outcomes after base cost"}
     tmp=args.out+".tmp"
