@@ -4,8 +4,8 @@ import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeigh
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.7.0";
-const BUILD_MARKER = "gold-ai-intelligence-0.7.0-paper-sizing-logs";
+const VERSION = "gold-ai-intelligence-0.7.1";
+const BUILD_MARKER = "gold-ai-intelligence-0.7.1-kronos-forecast-audit";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -24,7 +24,7 @@ const clamp = (x:number,a:number,b:number) => Math.max(a,Math.min(b,x));
 
 function freshState() {
   return { version:VERSION, createdAt:now(), updatedAt:now(), lastCycleAt:null as string|null, lastProcessedBar:null as string|null,
-    openPositions:[] as any[], closedTrades:[] as any[], shadowPositions:[] as any[], candidateHistory:[] as any[], events:[] as any[],
+    openPositions:[] as any[], closedTrades:[] as any[], shadowPositions:[] as any[], candidateHistory:[] as any[], events:[] as any[], kronosForecastHistory:[] as any[], geminiDecisionHistory:[] as any[],
     daily:{date:now().slice(0,10),trades:0,netUsd:0}, lastReport:null as any,
     metaLabeler:{status:"COLLECTING_LABELS",trained:false,model:null,note:"No trained XGBoost model is claimed. Candidate features and outcomes are being collected."} };
 }
@@ -32,7 +32,7 @@ async function readState() {
   const file = Bun.file(STATE_PATH);
   if(!await file.exists()) { console.log("AI_ENGINE_STATE_FILE_MISSING",STATE_PATH); return freshState(); }
   const x = await file.json();
-  return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[]};
+  return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[],kronosForecastHistory:Array.isArray(x.kronosForecastHistory)?x.kronosForecastHistory:[],geminiDecisionHistory:Array.isArray(x.geminiDecisionHistory)?x.geminiDecisionHistory:[]};
 }
 async function writeState(s:any) {
   s.updatedAt=now();
@@ -148,12 +148,38 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
   }
   return {candidates:out.sort((a,b)=>b.qualityScore-a.qualityScore),bar:last,atr:a,regime,h1Bias:h1b,m15Bias:m15b};
 }
+function recordModelDecisions(s:any,engine:any,report:any,kronos:any) {
+  const at=now();
+  s.geminiDecisionHistory.push({at,engineOk:!!engine?.ok,engineVersion:engine?.engineVersion||null,lastEvaluatedBar:engine?.lastEvaluatedBar||null,planDecision:engine?.plan?.decision||null,visionBlocked:engine?.visionHealth?.entryBlocked??null,geminiPlan:engine?.plan||null,geminiVisionHealth:engine?.visionHealth||null,scenarios:(engine?.scenarios||[]).map((x:any)=>({...x})),error:engine?.error?String(engine.error).slice(0,300):null,primaryDecision:report?.decision||null,primaryReason:report?.reason||null,bar:report?.bar||report?.lastM5||null});
+  if(s.geminiDecisionHistory.length>5000)s.geminiDecisionHistory=s.geminiDecisionHistory.slice(-5000);
+  s.kronosForecastHistory.push({at,barTime:report?.bar||report?.lastM5||null,...(kronos||{status:"MISSING"})});
+  if(s.kronosForecastHistory.length>5000)s.kronosForecastHistory=s.kronosForecastHistory.slice(-5000);
+}
 async function fetchKronos(bars:any) {
   const m5=bars.M5||[];
   if(m5.length<100)return {status:"UNAVAILABLE",reason:"INSUFFICIENT_CANDLES"};
   try {
     const r=await getJson(URLS.chartLab+"/kronos-forecast",{},50000);
-    return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
+    // Preserve the exact model response for audit. Do not invent a direction or confidence
+    // when the upstream service does not provide one.
+    const rawForecast=r.forecast??r.predictions??r.forecast_values??r.forecastValues??r.output??r.result??null;
+    return {
+      status:r.ok===false?"ERROR":"AVAILABLE",
+      model:r.model??r.model_name??null,
+      forecastBias:r.forecastBias??r.forecast_bias??r.direction??null,
+      forecastChange:r.forecastChange??r.forecast_change??null,
+      forecastChangePct:r.forecastChangePct??r.forecast_change_pct??null,
+      forecast:rawForecast,
+      quantiles:r.quantiles??r.forecast_quantiles??null,
+      timestamps:r.timestamps??r.forecast_timestamps??null,
+      latencyMs:r.latencyMs??r.latency_ms??null,
+      barsUsed:r.barsUsed??r.bars_used??null,
+      volumeUsed:r.volumeUsed??r.volume_used??null,
+      cached:!!r.cached,
+      outputAvailable:rawForecast!==null||r.forecastBias!=null||r.forecast_bias!=null||r.direction!=null,
+      rawResponse:r,
+      error:r.error||null
+    };
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
 async function loadArtifact(path:string) {
@@ -261,12 +287,12 @@ async function runCycle(source="scheduled") {
   if(!last||bars.M5.length<30||!fresh||mid===null) {
     console.log("AI_DATA_GATE",JSON.stringify({fresh,barCount:bars.M5.length,quote,chartFreshness:freshnessPlaceholder(chart)}));
     const report={at:now(),source,decision:"NO_TRADE",reason:!fresh?"STALE_OR_INVALID_MARKET_DATA":"INSUFFICIENT_M5_CANDLES",marketFresh:fresh,lastM5:last?.time||null,quote,kronos};
-    s.lastCycleAt=now();s.lastReport=report;event(s,{type:"NO_TRADE",reason:report.reason});await writeState(s);return report;
+    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,kronos);event(s,{type:"NO_TRADE",reason:report.reason});await writeState(s);return report;
   }
   await monitor(s,last,lotOz,cost);
   if(s.lastProcessedBar===last.time) {
     const report={at:now(),source,decision:"NO_NEW_BAR",reason:"BAR_ALREADY_PROCESSED",bar:last.time,openPositions:s.openPositions.length,kronos};
-    s.lastCycleAt=now();s.lastReport=report;await writeState(s);return report;
+    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,kronos);await writeState(s);return report;
   }
   const regimeResult=classifyMarketRegime(bars.M5,s.lastReport?.regime||null);
   const learningCollection=collectForwardLabels(s,bars.M5,regimeResult.regime,last.time);
@@ -336,7 +362,7 @@ async function runCycle(source="scheduled") {
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
     metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},liveTrading:false,
      riskSettings:{maxTradeRiskUsd:maxRisk,dailyLossLimitUsd:dailyLimit,maxOpenPositions,baseExposureOz:lotOz},sameBarPolicy:"If STOP and TARGET are both touched in one candle, STOP is assumed first (worst case).",disclaimer:model?"PAPER only. XGBoost accepted only with validated=true and validation.passed=true.":"PAPER only. EXPERT_RULES recommendations are UNVALIDATED_EXPERT; no probabilities are fabricated."};
-  s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;
+  s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,kronos);
   await writeState(s);event(s,{type:"CYCLE",bar:last.time,decision:report.decision,candidates:generated.candidates.length,accepted:accepted.length,rejected:rejected.length,regime:generated.regime});
   console.log("AI_ENGINE_CYCLE",JSON.stringify(report));
   return report;
@@ -361,6 +387,10 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
     }
     return json({ok:true,version:VERSION,mode:(await loadMetaModel())?"MODEL":"EXPERT_RULES",latestRecommendations:history.filter((x:any)=>x.entered).slice(-50).reverse(),byExpert,openPositions:s.openPositions,stats:stats(closed),liveTrading:false});
   }catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
+  if(req.method==="GET"&&u.pathname==="/model-history") {
+    if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
+    try{const s=await readState();return json({ok:true,kronosForecastHistory:s.kronosForecastHistory.slice(-200),geminiDecisionHistory:s.geminiDecisionHistory.slice(-200),counts:{kronosForecasts:s.kronosForecastHistory.length,geminiDecisions:s.geminiDecisionHistory.length}});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
+  }
   if(req.method==="GET"&&u.pathname==="/history") {
     if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
     try{const s=await readState();return json({ok:true,events:s.events.slice(-120),candidates:s.candidateHistory.slice(-120),openPositions:s.openPositions,closedTrades:s.closedTrades.slice(-120),stats:stats(s.closedTrades)});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
@@ -370,7 +400,7 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
     if(running)return json({ok:true,status:"ALREADY_RUNNING"},202);
     running=true;try{return json(await runCycle("manual"));}catch(e:any){return json({ok:false,error:String(e?.message||e)},502);}finally{running=false;}
   }
-  return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/signals","/history","/sync"]},404);
+  return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/signals","/history","/model-history","/sync"]},404);
 }});
 console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,engineVersion:VERSION,buildMarker:BUILD_MARKER,mode:"PAPER_ONLY",storage:"persistent-volume",urls:URLS}));
 void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",JSON.stringify({message:String(e?.message||e),name:e?.name||null,code:e?.code||null,stack:String(e?.stack||"").slice(0,900)}));}finally{running=false;}}await sleep(300000);}})();
