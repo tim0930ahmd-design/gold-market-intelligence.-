@@ -186,7 +186,9 @@ function recordModelDecisions(s:any,engine:any,report:any,tirex:any,kronos:any) 
   const at=now();
   s.geminiDecisionHistory.push({at,engineOk:!!engine?.ok,engineVersion:engine?.engineVersion||null,lastEvaluatedBar:engine?.lastEvaluatedBar||null,planDecision:engine?.plan?.decision||null,visionBlocked:engine?.visionHealth?.entryBlocked??null,geminiPlan:engine?.plan||null,geminiVisionHealth:engine?.visionHealth||null,scenarios:(engine?.scenarios||[]).map((x:any)=>({...x})),error:engine?.error?String(engine.error).slice(0,300):null,primaryDecision:report?.decision||null,primaryReason:report?.reason||null,bar:report?.bar||report?.lastM5||null});
   if(s.geminiDecisionHistory.length>5000)s.geminiDecisionHistory=s.geminiDecisionHistory.slice(-5000);
-  s.tirexForecasts.push({at,...tirex,outcomes:{}});\n  s.kronosForecastHistory.push({at,barTime:report?.bar||report?.lastM5||null,...(kronos||{status:"MISSING"})});\n  if(s.kronosForecastHistory.length>5000)s.kronosForecastHistory=s.kronosForecastHistory.slice(-5000);
+  s.tirexForecasts.push({at,...tirex,outcomes:{}});
+  s.kronosForecastHistory.push({at,barTime:report?.bar||report?.lastM5||null,...(kronos||{status:"MISSING"})});
+  if(s.kronosForecastHistory.length>5000)s.kronosForecastHistory=s.kronosForecastHistory.slice(-5000);
 }
 async function fetchKronos(bars:any) {
   const m5=bars.M5||[];
@@ -308,7 +310,7 @@ async function runCycle(source="scheduled") {
   await monitor(s,last,lotOz,cost);
   if(s.lastProcessedBar===last.time) {
     const report={at:now(),source,decision:"NO_NEW_BAR",reason:"BAR_ALREADY_PROCESSED",bar:last.time,openPositions:s.openPositions.length,kronos};
-    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2);await writeState(s);return report;
+    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2,kronos);await writeState(s);return report;
   }
   const regimeResult=classifyMarketRegime(bars.M5,s.lastReport?.regime||null);
   const learningCollection=collectForwardLabels(s,bars.M5,regimeResult.regime,last.time);
@@ -378,7 +380,7 @@ async function runCycle(source="scheduled") {
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
     metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},liveTrading:false,
      riskSettings:{maxTradeRiskUsd:maxRisk,dailyLossLimitUsd:dailyLimit,maxOpenPositions,baseExposureOz:lotOz},sameBarPolicy:"If STOP and TARGET are both touched in one candle, STOP is assumed first (worst case).",disclaimer:model?"PAPER only. XGBoost accepted only with validated=true and validation.passed=true.":"PAPER only. EXPERT_RULES recommendations are UNVALIDATED_EXPERT; no probabilities are fabricated."};
-  s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2);
+  s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2,kronos);
   await writeState(s);event(s,{type:"CYCLE",bar:last.time,decision:report.decision,candidates:generated.candidates.length,accepted:accepted.length,rejected:rejected.length,regime:generated.regime});
   console.log("AI_ENGINE_CYCLE",JSON.stringify(report));
   return report;
