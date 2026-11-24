@@ -5,6 +5,7 @@ type Candle = { time: string; open: number; high: number; low: number; close: nu
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
 const VERSION = "gold-ai-intelligence-0.7.0";
+const BUILD_MARKER = "gold-ai-intelligence-0.7.0-paper-sizing-logs";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -178,6 +179,10 @@ function stats(closed:any[]) {
 }
 function freshnessPlaceholder(chart:any){return chart?.freshness||null;}
 function resetDaily(s:any) {const d=now().slice(0,10);if(s.daily?.date!==d)s.daily={date:d,trades:0,netUsd:0};}
+function calculatePositionOz(stopDistance:number,baseExposureOz:number,maxRiskUsd:number) {
+  if(!Number.isFinite(stopDistance)||stopDistance<=0||!Number.isFinite(baseExposureOz)||baseExposureOz<=0||!Number.isFinite(maxRiskUsd)||maxRiskUsd<=0)return 0;
+  return Number(Math.min(baseExposureOz,maxRiskUsd/stopDistance).toFixed(4));
+}
 function riskReason(c:Candidate,quote:any,a:number,s:any,cost:number,maxRisk:number,dailyLimit:number,maxOpen:number) {
   const risk=Math.abs(c.entry-c.stopLoss),reward=Math.abs(c.target-c.entry),spread=n(quote.spread),spreadRatio=spread!==null?spread/a:null;
   const size=Number(c.positionOz||0),riskUsd=risk*size,netRR=(reward*size-cost)/Math.max(0.0001,risk*size+cost);
@@ -289,7 +294,7 @@ async function runCycle(source="scheduled") {
   const operatingMode=model?"MODEL":"EXPERT_RULES";
   for(const c of adaptiveCandidates) {
     const stopDistance=Math.abs(c.entry-c.stopLoss);
-    c.positionOz=Number(Math.min(lotOz,maxRisk/Math.max(0.0001,stopDistance)).toFixed(4));
+    c.positionOz=calculatePositionOz(stopDistance,lotOz,maxRisk);
     c.positionRiskUsd=Number((stopDistance*c.positionOz).toFixed(2));
     if(model&&c.metaLabel) {
       c.metaLabel.timeoutMeanR=Number(model.timeoutMeanR?.[c.direction]??0);
@@ -299,6 +304,9 @@ async function runCycle(source="scheduled") {
     }
     let why=riskReason(c,quote,generated.atr,s,cost,maxRisk,dailyLimit,maxOpenPositions);
     if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.metaEVStressUsd===null||c.metaEVStressUsd<=0||c.decisionIntelligence?.decision!=="PAPER_ELIGIBLE"))why="META_LABELER_LOW_EXPECTED_VALUE";
+    const candidateMode=model?"MODEL":"EXPERT_RULES";
+    const candidateDecision={engineVersion:VERSION,buildMarker:BUILD_MARKER,mode:candidateMode,expert:c.expert,direction:c.direction,decision:why?"NO_TRADE":"PAPER_RECOMMENDATION",reason:why,positionOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,maxRiskUsd:maxRisk,baseExposureOz:lotOz,entry:c.entry,stopLoss:c.stopLoss,target:c.target,atr:generated.atr,stopAtr:c.stopAtr};
+    console.log("AI_CANDIDATE_DECISION",JSON.stringify(candidateDecision));
     if(why) {
       rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
       s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz:c.positionOz});
@@ -309,7 +317,7 @@ async function runCycle(source="scheduled") {
     const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,kronosBias:kronos.forecastBias||null,lotOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,costUsd:cost,mfe:0,mae:0,mode:"PAPER",signalStatus:c.signalStatus};
     s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore,lotOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,status:c.signalStatus,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
     event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
-    console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore}));
+    console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,engineVersion:VERSION,mode:operatingMode,signalStatus:c.signalStatus,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,positionOz:c.positionOz,positionRiskUsd:c.positionRiskUsd}));
     if(s.openPositions.length>=maxOpenPositions)break;
   }
   for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,positionOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),signalStatus:c.signalStatus||(rejected.find(x=>x.id===c.id)?.reason||"REJECTED"),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
@@ -364,5 +372,5 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   }
   return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/signals","/history","/sync"]},404);
 }});
-console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,mode:"PAPER_ONLY",storage:"persistent-volume",urls:URLS}));
+console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,engineVersion:VERSION,buildMarker:BUILD_MARKER,mode:"PAPER_ONLY",storage:"persistent-volume",urls:URLS}));
 void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",JSON.stringify({message:String(e?.message||e),name:e?.name||null,code:e?.code||null,stack:String(e?.stack||"").slice(0,900)}));}finally{running=false;}}await sleep(300000);}})();
