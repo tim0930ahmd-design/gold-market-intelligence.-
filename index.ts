@@ -184,9 +184,9 @@ function settleTiRexForecasts(s:any,bars:Candle[]) {
 }
 function recordModelDecisions(s:any,engine:any,report:any,tirex:any) {
   const at=now();
-  s.geminiDecisionHistory.push({at,engineOk:!!engine?.ok,engineVersion:engine?.engineVersion||null,lastEvaluatedBar:engine?.lastEvaluatedBar||null,planDecision:engine?.plan?.decision||null,visionBlocked:engine?.visionHealth?.entryBlocked??null,scenarios:(engine?.scenarios||[]).map((x:any)=>({id:x.id||null,status:x.status||null,direction:x.direction||null,setup_class:x.setup_class||null,entry_zone:x.entry_zone||null,stop_loss:x.stop_loss??null,target:x.target??null,trigger:x.trigger||null})),error:engine?.error?String(engine.error).slice(0,300):null,primaryDecision:report?.decision||null,primaryReason:report?.reason||null,bar:report?.bar||report?.lastM5||null});
+  s.geminiDecisionHistory.push({at,engineOk:!!engine?.ok,engineVersion:engine?.engineVersion||null,lastEvaluatedBar:engine?.lastEvaluatedBar||null,planDecision:engine?.plan?.decision||null,visionBlocked:engine?.visionHealth?.entryBlocked??null,geminiPlan:engine?.plan||null,geminiVisionHealth:engine?.visionHealth||null,scenarios:(engine?.scenarios||[]).map((x:any)=>({...x})),error:engine?.error?String(engine.error).slice(0,300):null,primaryDecision:report?.decision||null,primaryReason:report?.reason||null,bar:report?.bar||report?.lastM5||null});
   if(s.geminiDecisionHistory.length>5000)s.geminiDecisionHistory=s.geminiDecisionHistory.slice(-5000);
-  if(tirex?.status==="AVAILABLE"||tirex?.status==="ERROR")s.tirexForecasts.push({at,...tirex,outcomes:{}});
+  s.tirexForecasts.push({at,...tirex,outcomes:{}});
 }
 async function fetchKronos(bars:any) {
   const m5=bars.M5||[];
