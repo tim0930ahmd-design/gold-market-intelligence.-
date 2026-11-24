@@ -4,8 +4,8 @@ import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeigh
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.7.0";
-const BUILD_MARKER = "gold-ai-intelligence-0.7.0-paper-sizing-logs";
+const VERSION = "gold-ai-intelligence-0.7.1";
+const BUILD_MARKER = "gold-ai-intelligence-0.7.1-kronos-forecast-audit";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -160,7 +160,26 @@ async function fetchKronos(bars:any) {
   if(m5.length<100)return {status:"UNAVAILABLE",reason:"INSUFFICIENT_CANDLES"};
   try {
     const r=await getJson(URLS.chartLab+"/kronos-forecast",{},50000);
-    return {status:r.ok?"AVAILABLE":"ERROR",model:r.model,forecastBias:r.forecastBias,forecastChange:r.forecastChange,forecastChangePct:r.forecastChangePct,latencyMs:r.latencyMs,barsUsed:r.barsUsed,volumeUsed:r.volumeUsed,cached:!!r.cached,error:r.error||null};
+    // Preserve the exact model response for audit. Do not invent a direction or confidence
+    // when the upstream service does not provide one.
+    const rawForecast=r.forecast??r.predictions??r.forecast_values??r.forecastValues??r.output??r.result??null;
+    return {
+      status:r.ok===false?"ERROR":"AVAILABLE",
+      model:r.model??r.model_name??null,
+      forecastBias:r.forecastBias??r.forecast_bias??r.direction??null,
+      forecastChange:r.forecastChange??r.forecast_change??null,
+      forecastChangePct:r.forecastChangePct??r.forecast_change_pct??null,
+      forecast:rawForecast,
+      quantiles:r.quantiles??r.forecast_quantiles??null,
+      timestamps:r.timestamps??r.forecast_timestamps??null,
+      latencyMs:r.latencyMs??r.latency_ms??null,
+      barsUsed:r.barsUsed??r.bars_used??null,
+      volumeUsed:r.volumeUsed??r.volume_used??null,
+      cached:!!r.cached,
+      outputAvailable:rawForecast!==null||r.forecastBias!=null||r.forecast_bias!=null||r.direction!=null,
+      rawResponse:r,
+      error:r.error||null
+    };
   } catch(e:any) { return {status:"ERROR",reason:String(e?.message||e).slice(0,240)}; }
 }
 async function loadArtifact(path:string) {
