@@ -24,7 +24,7 @@ const clamp = (x:number,a:number,b:number) => Math.max(a,Math.min(b,x));
 
 function freshState() {
   return { version:VERSION, createdAt:now(), updatedAt:now(), lastCycleAt:null as string|null, lastProcessedBar:null as string|null,
-    openPositions:[] as any[], closedTrades:[] as any[], shadowPositions:[] as any[], candidateHistory:[] as any[], events:[] as any[], tirexForecasts:[] as any[], geminiDecisionHistory:[] as any[],
+    openPositions:[] as any[], closedTrades:[] as any[], shadowPositions:[] as any[], candidateHistory:[] as any[], events:[] as any[], tirexForecasts:[] as any[], kronosForecastHistory:[] as any[], geminiDecisionHistory:[] as any[],
     daily:{date:now().slice(0,10),trades:0,netUsd:0}, lastReport:null as any,
     metaLabeler:{status:"COLLECTING_LABELS",trained:false,model:null,note:"No trained XGBoost model is claimed. Candidate features and outcomes are being collected."} };
 }
@@ -32,7 +32,7 @@ async function readState() {
   const file = Bun.file(STATE_PATH);
   if(!await file.exists()) { console.log("AI_ENGINE_STATE_FILE_MISSING",STATE_PATH); return freshState(); }
   const x = await file.json();
-  return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[],tirexForecasts:Array.isArray(x.tirexForecasts)?x.tirexForecasts:[],geminiDecisionHistory:Array.isArray(x.geminiDecisionHistory)?x.geminiDecisionHistory:[]};
+  return {...freshState(),...x,openPositions:Array.isArray(x.openPositions)?x.openPositions:[],closedTrades:Array.isArray(x.closedTrades)?x.closedTrades:[],shadowPositions:Array.isArray(x.shadowPositions)?x.shadowPositions:[],candidateHistory:Array.isArray(x.candidateHistory)?x.candidateHistory:[],events:Array.isArray(x.events)?x.events:[],tirexForecasts:Array.isArray(x.tirexForecasts)?x.tirexForecasts:[],kronosForecastHistory:Array.isArray(x.kronosForecastHistory)?x.kronosForecastHistory:[],geminiDecisionHistory:Array.isArray(x.geminiDecisionHistory)?x.geminiDecisionHistory:[]};
 }
 async function writeState(s:any) {
   s.updatedAt=now();
@@ -182,11 +182,11 @@ function settleTiRexForecasts(s:any,bars:Candle[]) {
   }
   if(s.tirexForecasts.length>5000)s.tirexForecasts=s.tirexForecasts.slice(-5000);
 }
-function recordModelDecisions(s:any,engine:any,report:any,tirex:any) {
+function recordModelDecisions(s:any,engine:any,report:any,tirex:any,kronos:any) {
   const at=now();
   s.geminiDecisionHistory.push({at,engineOk:!!engine?.ok,engineVersion:engine?.engineVersion||null,lastEvaluatedBar:engine?.lastEvaluatedBar||null,planDecision:engine?.plan?.decision||null,visionBlocked:engine?.visionHealth?.entryBlocked??null,geminiPlan:engine?.plan||null,geminiVisionHealth:engine?.visionHealth||null,scenarios:(engine?.scenarios||[]).map((x:any)=>({...x})),error:engine?.error?String(engine.error).slice(0,300):null,primaryDecision:report?.decision||null,primaryReason:report?.reason||null,bar:report?.bar||report?.lastM5||null});
   if(s.geminiDecisionHistory.length>5000)s.geminiDecisionHistory=s.geminiDecisionHistory.slice(-5000);
-  s.tirexForecasts.push({at,...tirex,outcomes:{}});
+  s.tirexForecasts.push({at,...tirex,outcomes:{}});\n  s.kronosForecastHistory.push({at,barTime:report?.bar||report?.lastM5||null,...(kronos||{status:"MISSING"})});\n  if(s.kronosForecastHistory.length>5000)s.kronosForecastHistory=s.kronosForecastHistory.slice(-5000);
 }
 async function fetchKronos(bars:any) {
   const m5=bars.M5||[];
@@ -303,7 +303,7 @@ async function runCycle(source="scheduled") {
   if(!last||bars.M5.length<30||!fresh||mid===null) {
     console.log("AI_DATA_GATE",JSON.stringify({fresh,barCount:bars.M5.length,quote,chartFreshness:freshnessPlaceholder(chart)}));
     const report={at:now(),source,decision:"NO_TRADE",reason:!fresh?"STALE_OR_INVALID_MARKET_DATA":"INSUFFICIENT_M5_CANDLES",marketFresh:fresh,lastM5:last?.time||null,quote,kronos};
-    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2);event(s,{type:"NO_TRADE",reason:report.reason});await writeState(s);return report;
+    s.lastCycleAt=now();s.lastReport=report;recordModelDecisions(s,engine,report,tirex2,kronos);event(s,{type:"NO_TRADE",reason:report.reason});await writeState(s);return report;
   }
   await monitor(s,last,lotOz,cost);
   if(s.lastProcessedBar===last.time) {
@@ -405,7 +405,7 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   }catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
   if(req.method==="GET"&&u.pathname==="/model-history") {
     if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
-    try{const s=await readState();return json({ok:true,tirexForecasts:s.tirexForecasts.slice(-200),geminiDecisionHistory:s.geminiDecisionHistory.slice(-200),counts:{tirexForecasts:s.tirexForecasts.length,geminiDecisions:s.geminiDecisionHistory.length}});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
+    try{const s=await readState();return json({ok:true,tirexForecasts:s.tirexForecasts.slice(-200),kronosForecastHistory:s.kronosForecastHistory.slice(-200),geminiDecisionHistory:s.geminiDecisionHistory.slice(-200),counts:{tirexForecasts:s.tirexForecasts.length,kronosForecasts:s.kronosForecastHistory.length,geminiDecisions:s.geminiDecisionHistory.length}});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
   }
   if(req.method==="GET"&&u.pathname==="/history") {
     if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
