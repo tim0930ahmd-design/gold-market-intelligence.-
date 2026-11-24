@@ -40,7 +40,8 @@ export function selectAdaptiveExperts(candidates:any[],regime:RegimeResult) {
   const ranked=candidates.filter(c=>eligible.includes(c.expert)).map(c=>{
     const regimeFit=eligible.indexOf(c.expert)===0?12:eligible.indexOf(c.expert)===1?8:4;
     const confidenceAdjustment=(regime.confidence-0.5)*10;
-    return {...c,selectorScore:Number((c.qualityScore+regimeFit+confidenceAdjustment).toFixed(2)),selector:{regime:regime.regime,regimeConfidence:regime.confidence,expertRank:eligible.indexOf(c.expert)+1}};
+    const rangePenalty=c.expert==="RANGE_REJECTION"?10:0;
+    return {...c,selectorScore:Number((c.qualityScore+regimeFit+confidenceAdjustment-rangePenalty).toFixed(2)),selector:{regime:regime.regime,regimeConfidence:regime.confidence,expertRank:eligible.indexOf(c.expert)+1,rangePenalty}};
   }).sort((a,b)=>b.selectorScore-a.selectorScore);
   // Keep independent expert opportunities; no cross-expert consensus requirement.
   const seen=new Set<string>();
@@ -65,9 +66,12 @@ function walkTree(node:any,x:number[]):number {
 }
 export function predictMetaLabel(model:any,x:number[]) {
   if(!model||model.kind!=="xgboost-one-vs-rest-v1")return null;
+  const side=Number(x[10])===1?"BUY":"SELL";
+  const sideModels=model.modelsBySide?.[side]||model.models;
+  if(!sideModels)return null;
   const out:any={};
   for(const cls of ["TARGET","STOP","TIMEOUT"]) {
-    const m=model.models?.[cls];if(!m||!Array.isArray(m.trees))return null;
+    const m=sideModels[cls];if(!m||!Array.isArray(m.trees))return null;
     let margin=Number(m.baseMargin||0);
     for(const tree of m.trees)margin+=walkTree(tree,x);
     margin=margin*Number(m.plattA??1)+Number(m.plattB??0);

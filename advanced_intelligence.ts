@@ -73,11 +73,11 @@ export function applyExpertWeights(candidates:any[],weights:any) {
 }
 export function decisionIntelligence(c:any,prob:any,cost:number,lotOz:number,stressCost:number) {
  if(!prob)return {decision:"NO_TRADE",reason:"NO_VALIDATED_PROBABILITY_MODEL",evUsd:null,stressEvUsd:null};
- const pT=Number(prob.pTarget),pS=Number(prob.pStop),pX=Number(prob.pTimeout||0);
- if(![pT,pS,pX].every(Number.isFinite)||Math.min(pT,pS,pX)<0)return {decision:"NO_TRADE",reason:"INVALID_PROBABILITIES",evUsd:null,stressEvUsd:null};
- const reward=Math.abs(c.target-c.entry)*lotOz,risk=Math.abs(c.entry-c.stopLoss)*lotOz;
- const ev=pT*reward-pS*risk-cost,stress=pT*reward-pS*risk-stressCost;
- return {decision:ev>0&&stress>0?"PAPER_ELIGIBLE":"NO_TRADE",reason:ev>0&&stress>0?"POSITIVE_EV_BASE_AND_STRESS":"NON_POSITIVE_EXPECTED_VALUE",evUsd:Number(ev.toFixed(3)),stressEvUsd:Number(stress.toFixed(3)),pTarget:pT,pStop:pS,pTimeout:pX};
+ const pT=Number(prob.pTarget),pS=Number(prob.pStop),pX=Number(prob.pTimeout||0),timeoutMeanR=Number(prob.timeoutMeanR??0);
+ if(![pT,pS,pX,timeoutMeanR].every(Number.isFinite)||Math.min(pT,pS,pX)<0||Math.abs(pT+pS+pX-1)>0.02)return {decision:"NO_TRADE",reason:"INVALID_PROBABILITIES",evUsd:null,stressEvUsd:null};
+ const reward=Math.abs(c.target-c.entry)*lotOz,risk=Math.abs(c.entry-c.stopLoss)*lotOz,timeoutValue=timeoutMeanR*risk;
+ const grossEV=pT*reward-pS*risk+pX*timeoutValue,ev=grossEV-cost,stress=grossEV-stressCost;
+ return {decision:ev>0&&stress>0?"PAPER_ELIGIBLE":"NO_TRADE",reason:ev>0&&stress>0?"POSITIVE_EV_BASE_AND_STRESS":"NON_POSITIVE_EXPECTED_VALUE",evUsd:Number(ev.toFixed(3)),stressEvUsd:Number(stress.toFixed(3)),pTarget:pT,pStop:pS,pTimeout:pX,timeoutMeanR,timeoutContributionUsd:Number((pX*timeoutValue).toFixed(3))};
 }
 
 /** Resolve strictly forward-only labels and append the current completed-bar snapshot. */

@@ -1,0 +1,23 @@
+name: Gold AI 0.7.0 CI
+on:
+  push:
+    branches: [gold-ai-intelligence-v0-7]
+  pull_request:
+    branches: [gold-ai-intelligence-v0-7]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.4
+      - name: Build TypeScript engine
+        run: bun build index.ts --target=bun --outdir /tmp/gold-ai-build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile training script
+        run: python -m py_compile train_xgb.py
+      - name: Run training pipeline contract tests
+        run: python -m unittest discover -s tests -v

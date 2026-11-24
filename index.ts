@@ -1,10 +1,10 @@
-import { classifyMarketRegime, selectAdaptiveExperts, buildMetaFeatures, predictMetaLabel } from "./ai_layers.ts";
+import { classifyMarketRegime, selectAdaptiveExperts, buildMetaFeatures, predictMetaLabel, META_FEATURES } from "./ai_layers.ts";
 import { marketVector, discoverOpportunities, predictScenarios, learnExpertWeights, applyExpertWeights, decisionIntelligence, collectForwardLabels } from "./advanced_intelligence.ts";
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume?: number };
 type Candidate = { id: string; expert: string; direction: "BUY"|"SELL"; entry: number; stopLoss: number; target: number; risk: number; rr: number; stopAtr: number; qualityScore: number; barTime: string; regime: string; features: any; aiComment?: string|null };
 
-const VERSION = "gold-ai-intelligence-0.6.0";
+const VERSION = "gold-ai-intelligence-0.7.0";
 const PORT = Number(Bun.env.PORT || 8080);
 const URLS = {
   bridge: String(Bun.env.BRIDGE_URL || "https://gold-ctrader-bridge-production.up.railway.app").replace(/\/+$/,""),
@@ -68,18 +68,21 @@ function nearestZone(zones:any[],kind:string,price:number,max:number) {
     .map(z=>({...z,distance:price<z.zoneLow?z.zoneLow-price:price>z.zoneHigh?price-z.zoneHigh:0}))
     .filter(z=>z.distance<=max).sort((a,b)=>a.distance-b.distance)[0]||null;
 }
-function buildCandidate(expert:string,side:"BUY"|"SELL",mid:number,atr:number,stop:number,bar:Candle,regime:string,features:any,baseScore=50) {
-  const risk=side==="BUY"?mid-stop:stop-mid;
-  if(!Number.isFinite(risk)||risk<=0||risk/atr<0.25||risk/atr>2.5)return null;
-  const target=side==="BUY"?mid+risk*1.8:mid-risk*1.8;
-  return {id:[bar.time,expert,side].join("|"),expert,direction:side,entry:Number(mid.toFixed(2)),stopLoss:Number(stop.toFixed(2)),target:Number(target.toFixed(2)),risk:Number(risk.toFixed(3)),rr:1.8,stopAtr:Number((risk/atr).toFixed(2)),qualityScore:baseScore,barTime:bar.time,regime,features};
+function buildCandidate(expert:string,side:"BUY"|"SELL",mid:number,atr:number,rawStop:number,bar:Candle,regime:string,features:any,baseScore=50) {
+  if(!Number.isFinite(atr)||atr<=0)return null;
+  const rawRisk=side==="BUY"?mid-rawStop:rawStop-mid;
+  if(!Number.isFinite(rawRisk)||rawRisk<=0)return null;
+  const risk=clamp(rawRisk,0.8*atr,1.5*atr),stop=side==="BUY"?mid-risk:mid+risk,rr=1.8;
+  const target=side==="BUY"?mid+risk*rr:mid-risk*rr;
+  return {id:[bar.time,expert,side].join("|"),expert,direction:side,entry:Number(mid.toFixed(2)),stopLoss:Number(stop.toFixed(2)),target:Number(target.toFixed(2)),risk:Number(risk.toFixed(3)),rr,stopAtr:Number((risk/atr).toFixed(2)),qualityScore:baseScore,barTime:bar.time,regime,features};
 }
 function expertAdjustment(closed:any[],expert:string) {
   const rows=closed.filter(x=>x.expert===expert).slice(-30);
-  if(rows.length<8)return 0;
+  if(rows.length<8)return expert==="RANGE_REJECTION"?-6:0;
   const wins=rows.filter(x=>x.netUsd>0).length/rows.length;
   const avgR=rows.reduce((a,x)=>a+Number(x.resultR||0),0)/rows.length;
-  return clamp((wins-0.5)*16+avgR*4,-8,8);
+  const learned=clamp((wins-0.5)*16+avgR*4,-8,8);
+  return expert==="RANGE_REJECTION"?Math.min(-4,learned-4):learned;
 }
 function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:any,closed:any[],regimeOverride:any=null) {
   const out:Candidate[]=[],m5:Candle[]=bars.M5||[],last=m5.at(-1),prev=m5.at(-2),frames=chart.frames||{};
@@ -116,8 +119,8 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
     add("REVERSAL","SELL",Math.max(last.high,sh.price)+a*0.22,{sweptLevel:sh.price,structureShift:true},17);
   if(demand&&(h1b==="BULLISH"||m15b==="BULLISH")&&last.close>last.open&&last.close>=demand.zoneLow)add("TREND_PULLBACK","BUY",Math.min(last.low,demand.zoneLow)-a*0.18,{zone:demand,h1b,m15b},12);
   if(supply&&(h1b==="BEARISH"||m15b==="BEARISH")&&last.close<last.open&&last.close<=supply.zoneHigh)add("TREND_PULLBACK","SELL",Math.max(last.high,supply.zoneHigh)+a*0.18,{zone:supply,h1b,m15b},12);
-  if((regime==="RANGE"||regime==="RANGING")&&demand&&last.low<=demand.zoneHigh&&last.close>last.open)add("RANGE_REJECTION","BUY",Math.min(last.low,demand.zoneLow)-a*0.15,{zone:demand},10);
-  if((regime==="RANGE"||regime==="RANGING")&&supply&&last.high>=supply.zoneLow&&last.close<last.open)add("RANGE_REJECTION","SELL",Math.max(last.high,supply.zoneHigh)+a*0.15,{zone:supply},10);
+  if((regime==="RANGE"||regime==="RANGING")&&demand&&last.low<=demand.zoneHigh&&last.close>last.open)add("RANGE_REJECTION","BUY",Math.min(last.low,demand.zoneLow)-a*0.15,{zone:demand},0);
+  if((regime==="RANGE"||regime==="RANGING")&&supply&&last.high>=supply.zoneLow&&last.close<last.open)add("RANGE_REJECTION","SELL",Math.max(last.high,supply.zoneHigh)+a*0.15,{zone:supply},0);
   if(body>=a*0.8&&pos>=0.78&&(h1b==="BULLISH"||m15b==="BULLISH"))add("MOMENTUM_IMPULSE","BUY",last.low-a*0.25,{bodyAtr:Number((body/a).toFixed(2)),closePosition:pos},8);
   if(body>=a*0.8&&pos<=0.22&&(h1b==="BEARISH"||m15b==="BEARISH"))add("MOMENTUM_IMPULSE","SELL",last.high+a*0.25,{bodyAtr:Number((body/a).toFixed(2)),closePosition:pos},8);
 
@@ -130,7 +133,8 @@ function generateCandidates(bars:any,chart:any,mid:number,kronos:any,refEngine:a
     if(dist>a*0.5)continue;
     const risk=sc.direction==="BUY"?mid-stop:stop-mid,rew=sc.direction==="BUY"?target-mid:mid-target;
     if(risk<=0||rew/risk<1.5)continue;
-    out.push({id:[last.time,"GEMINI_VISION",sc.id].join("|"),expert:"GEMINI_VISION",direction:sc.direction,entry:Number(mid.toFixed(2)),stopLoss:stop,target,risk:Number(risk.toFixed(3)),rr:Number((rew/risk).toFixed(2)),stopAtr:Number((risk/a).toFixed(2)),qualityScore:62,barTime:last.time,regime,features:{referenceScenario:sc.id,setupClass:sc.setup_class,trigger:sc.trigger}});
+    const c=buildCandidate("GEMINI_VISION",sc.direction,mid,a,stop,last,regime,{referenceScenario:sc.id,setupClass:sc.setup_class,trigger:sc.trigger},62);
+    if(c)out.push(c);
   }
   for(const c of out) {
     if(c.direction==="BUY"&&h1b==="BULLISH")c.qualityScore+=8;
@@ -160,7 +164,10 @@ async function loadMetaModel() {
     const file=Bun.file("/data/gold-ai-xgb-model.json");
     if(!await file.exists())return null;
     const model=await file.json();
-    return model?.kind==="xgboost-one-vs-rest-v1"&&model.featureCount===25?model:null;
+    const sides=["BUY","SELL"],classes=["TARGET","STOP","TIMEOUT"];
+    const shapeOk=sides.every(side=>classes.every(cls=>Array.isArray(model.modelsBySide?.[side]?.[cls]?.trees)));
+    const featureOrderOk=Array.isArray(model.featureNames)&&JSON.stringify(model.featureNames)===JSON.stringify(META_FEATURES);
+    return model?.kind==="xgboost-one-vs-rest-v1"&&model.featureCount===25&&featureOrderOk&&shapeOk&&model.validated===true&&model.validation?.passed===true?model:null;
   } catch(e:any) { console.log("META_MODEL_LOAD_ERROR",String(e?.message||e)); return null; }
 }
 function stats(closed:any[]) {
@@ -171,17 +178,20 @@ function stats(closed:any[]) {
 }
 function freshnessPlaceholder(chart:any){return chart?.freshness||null;}
 function resetDaily(s:any) {const d=now().slice(0,10);if(s.daily?.date!==d)s.daily={date:d,trades:0,netUsd:0};}
-function riskReason(c:Candidate,quote:any,a:number,s:any,cost:number,lotOz:number,maxRisk:number,dailyLimit:number) {
+function riskReason(c:Candidate,quote:any,a:number,s:any,cost:number,maxRisk:number,dailyLimit:number,maxOpen:number) {
   const risk=Math.abs(c.entry-c.stopLoss),reward=Math.abs(c.target-c.entry),spread=n(quote.spread),spreadRatio=spread!==null?spread/a:null;
-  const netRR=(reward-cost)/Math.max(0.0001,risk+cost);
+  const size=Number(c.positionOz||0),riskUsd=risk*size,netRR=(reward*size-cost)/Math.max(0.0001,risk*size+cost);
   if(risk<=0||c.rr<1.5)return "INVALID_RISK_OR_RR";
-  if(c.stopAtr<0.25||c.stopAtr>2.5)return "STOP_ATR_OUT_OF_RANGE";
+  if(c.stopAtr<0.8||c.stopAtr>1.5)return "STOP_ATR_OUT_OF_RANGE";
   if(spreadRatio===null||spreadRatio>0.15)return "SPREAD_UNAVAILABLE_OR_HIGH";
-  if(risk*lotOz>maxRisk)return "MAX_RISK_USD";
+  if(size<=0||riskUsd>maxRisk+0.01)return "POSITION_SIZE_OR_RISK_LIMIT";
   if(netRR<=0)return "NEGATIVE_NET_REWARD_AFTER_COST";
-  if(Number(s.daily.netUsd||0)<=-dailyLimit)return "DAILY_LOSS_LIMIT";
-  if(s.openPositions.length>=4)return "MAX_OPEN_POSITIONS";
-  if(s.openPositions.some((p:any)=>p.direction===c.direction&&p.expert===c.expert&&Math.abs(p.entry-c.entry)<a*0.35))return "DUPLICATE_OR_OVERLAP";
+  const openRisk=s.openPositions.reduce((sum:number,p:any)=>sum+Number(p.positionRiskUsd??(Math.abs(p.entry-p.stopLoss)*Number(p.lotOz||0))),0);
+  const remainingDailyRisk=Math.max(0,dailyLimit+Math.min(0,Number(s.daily.netUsd||0))-openRisk);
+  if(riskUsd>remainingDailyRisk+0.01)return "DAILY_LOSS_OR_OPEN_RISK_BUDGET";
+  if(s.openPositions.length>=maxOpen)return "MAX_OPEN_POSITIONS";
+  const cLow=Math.min(c.entry,c.stopLoss,c.target),cHigh=Math.max(c.entry,c.stopLoss,c.target);
+  if(s.openPositions.some((p:any)=>Math.max(cLow,Math.min(Number(p.entry),Number(p.stopLoss),Number(p.target)))<=Math.min(cHigh,Math.max(Number(p.entry),Number(p.stopLoss),Number(p.target)))))return "DUPLICATE_OR_OVERLAP";
   return null;
 }
 async function monitor(s:any,bar:Candle,lotOz:number,cost:number) {
@@ -192,11 +202,12 @@ async function monitor(s:any,bar:Candle,lotOz:number,cost:number) {
     const target=p.direction==="BUY"?bar.high>=p.target:bar.low<=p.target;
     p.mfe=Math.max(Number(p.mfe||0),p.direction==="BUY"?bar.high-p.entry:p.entry-bar.low);
     p.mae=Math.max(Number(p.mae||0),p.direction==="BUY"?p.entry-bar.low:bar.high-p.entry);
+    const bothHit=stop&&target;
     let why=null,exit=null;
-    if(stop){why="STOP";exit=p.stopLoss;}else if(target){why="TARGET";exit=p.target;}else if(Date.now()-Date.parse(p.openedAt)>=21600000){why="TIMEOUT";exit=bar.close;}
+    if(stop){why=bothHit?"STOP_BOTH_HIT_STOP_FIRST":"STOP";exit=p.stopLoss;}else if(target){why="TARGET";exit=p.target;}else if(Date.parse(bar.time)-Date.parse(p.openedBarTime)>=21600000){why="TIMEOUT";exit=bar.close;}
     if(!why){keep.push(p);continue;}
-    const move=p.direction==="BUY"?exit-p.entry:p.entry-exit,gross=move*lotOz,net=gross-cost;
-    const row={...p,closedAt:now(),exit,exitReason:why,grossUsd:Number(gross.toFixed(2)),costUsd:cost,netUsd:Number(net.toFixed(2)),stressNetUsd:Number((gross-0.74).toFixed(2)),resultR:Number((move/Math.max(0.0001,p.risk)).toFixed(3))};
+    const move=p.direction==="BUY"?exit-p.entry:p.entry-exit,positionOz=Number(p.lotOz??lotOz),gross=move*positionOz,net=gross-cost;
+    const row={...p,closedAt:now(),exit,exitReason:why,bothHitStopFirst:bothHit,grossUsd:Number(gross.toFixed(2)),costUsd:cost,netUsd:Number(net.toFixed(2)),stressNetUsd:Number((gross-0.74).toFixed(2)),resultR:Number((move/Math.max(0.0001,p.risk)).toFixed(3))};
     s.closedTrades.push(row);s.daily.trades++;s.daily.netUsd+=row.netUsd;
     s.candidateHistory.push({type:"SHADOW_OUTCOME",id:p.id,expert:p.expert,direction:p.direction,outcome:why,netUsd:row.netUsd,stressNetUsd:row.stressNetUsd,resultR:row.resultR});
     event(s,{type:"PAPER_CLOSE",id:p.id,expert:p.expert,direction:p.direction,exitReason:why,netUsd:row.netUsd,resultR:row.resultR});
@@ -208,9 +219,9 @@ async function monitor(s:any,bar:Candle,lotOz:number,cost:number) {
   for(const p of s.shadowPositions) {
     if(Date.parse(bar.time)<=Date.parse(p.barTime)){shadows.push(p);continue;}
     const stop=p.direction==="BUY"?bar.low<=p.stopLoss:bar.high>=p.stopLoss,target=p.direction==="BUY"?bar.high>=p.target:bar.low<=p.target;
-    let why=null,exit=null;if(stop){why="STOP";exit=p.stopLoss;}else if(target){why="TARGET";exit=p.target;}else if(Date.now()-Date.parse(p.createdAt)>=21600000){why="TIMEOUT";exit=bar.close;}
+    const bothHit=stop&&target;let why=null,exit=null;if(stop){why=bothHit?"STOP_BOTH_HIT_STOP_FIRST":"STOP";exit=p.stopLoss;}else if(target){why="TARGET";exit=p.target;}else if(Date.parse(bar.time)-Date.parse(p.barTime)>=21600000){why="TIMEOUT";exit=bar.close;}
     if(!why){shadows.push(p);continue;}
-    const move=p.direction==="BUY"?exit-p.entry:p.entry-exit,gross=move*lotOz;
+    const move=p.direction==="BUY"?exit-p.entry:p.entry-exit,gross=move*Number(p.lotOz??lotOz);
     s.candidateHistory.push({type:"SHADOW_OUTCOME",id:p.id,expert:p.expert,direction:p.direction,outcome:why,netUsd:Number((gross-cost).toFixed(2)),stressNetUsd:Number((gross-0.74).toFixed(2)),resultR:Number((move/Math.max(.0001,p.risk)).toFixed(3))});
     event(s,{type:"SHADOW_OUTCOME",id:p.id,expert:p.expert,outcome:why,netUsd:Number((gross-cost).toFixed(2))});
   }
@@ -238,7 +249,7 @@ async function runCycle(source="scheduled") {
   const f=chart.freshness||{},fresh=chart.ok===true&&f.dataFresh===true&&Number(f.quoteAgeMinutes)<=10&&Number(f.m5BarAgeMinutes)<=20;
   const cost=n(Bun.env.PAPER_TRADE_COST_USD)??0.37,stress=n(Bun.env.PAPER_STRESS_COST_USD)??0.74;
   const lotSize=n(Bun.env.PAPER_LOT_SIZE)??0.01,contract=n(Bun.env.CONTRACT_OZ_PER_LOT)??100,lotOz=lotSize*contract;
-  const maxRisk=n(Bun.env.MAX_TRADE_RISK_USD)??2,dailyLimit=n(Bun.env.DAILY_LOSS_LIMIT_USD)??2;
+  const maxRisk=n(Bun.env.MAX_TRADE_RISK_USD)??2,dailyLimit=n(Bun.env.DAILY_LOSS_LIMIT_USD)??4,maxOpenPositions=Math.max(1,Math.floor(n(Bun.env.MAX_OPEN_POSITIONS)??4));
   let kronos:any={status:"SKIPPED",reason:"STALE_OR_INSUFFICIENT_MARKET_DATA"};
   if(last&&bars.M5.length>=100&&fresh&&mid!==null){kronos=await fetchKronos(bars);console.log("AI_KRONOS_RESULT",JSON.stringify(kronos));}
   const ref=engine.ok?engine:null;
@@ -268,44 +279,55 @@ async function runCycle(source="scheduled") {
   for(const c of adaptiveCandidates) {
     c.metaFeatures=buildMetaFeatures(c,regimeResult,quote.spread,generated.atr);
     c.metaLabel=model?predictMetaLabel(model,c.metaFeatures):null;
-    c.metaEVUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-cost).toFixed(3)):null;
-    c.metaEVStressUsd=c.metaLabel?Number((c.metaLabel.pTarget*Math.abs(c.target-c.entry)*lotOz-c.metaLabel.pStop*Math.abs(c.entry-c.stopLoss)*lotOz-stress).toFixed(3)):null;
-    c.decisionIntelligence=decisionIntelligence(c,c.metaLabel,cost,lotOz,stress);
+    if(c.metaLabel)c.metaLabel.timeoutMeanR=Number(model?.timeoutMeanR?.[c.direction]??model?.timeoutMeanR??0);
+    c.metaEVUsd=c.metaLabel?decisionIntelligence(c,c.metaLabel,cost,c.positionOz||lotOz,stress).evUsd:null;
+    c.metaEVStressUsd=c.metaLabel?decisionIntelligence(c,c.metaLabel,cost,c.positionOz||lotOz,stress).stressEvUsd:null;
+    c.decisionIntelligence=decisionIntelligence(c,c.metaLabel,cost,c.positionOz||lotOz,stress);
     c.scenarioForecast=scenarioForecast;
   }
   const accepted:any[]=[],rejected:any[]=[];
+  const operatingMode=model?"MODEL":"EXPERT_RULES";
   for(const c of adaptiveCandidates) {
-    let why=riskReason(c,quote,generated.atr,s,cost,lotOz,maxRisk,dailyLimit);
-    if(!why&&!model)why="META_MODEL_NOT_TRAINED_COLLECTING_LABELS";
-    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.decisionIntelligence?.decision!=="PAPER_ELIGIBLE"))why="META_LABELER_LOW_EXPECTED_VALUE";
+    const stopDistance=Math.abs(c.entry-c.stopLoss);
+    c.positionOz=Number(Math.min(lotOz,maxRisk/Math.max(0.0001,stopDistance)).toFixed(4));
+    c.positionRiskUsd=Number((stopDistance*c.positionOz).toFixed(2));
+    if(model&&c.metaLabel) {
+      c.metaLabel.timeoutMeanR=Number(model.timeoutMeanR?.[c.direction]??0);
+      c.decisionIntelligence=decisionIntelligence(c,c.metaLabel,cost,c.positionOz,stress);
+      c.metaEVUsd=c.decisionIntelligence.evUsd;
+      c.metaEVStressUsd=c.decisionIntelligence.stressEvUsd;
+    }
+    let why=riskReason(c,quote,generated.atr,s,cost,maxRisk,dailyLimit,maxOpenPositions);
+    if(!why&&model&&(!c.metaLabel||c.metaEVUsd===null||c.metaEVUsd<=0||c.metaEVStressUsd===null||c.metaEVStressUsd<=0||c.decisionIntelligence?.decision!=="PAPER_ELIGIBLE"))why="META_LABELER_LOW_EXPECTED_VALUE";
     if(why) {
       rejected.push({id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
-      s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz});
+      s.shadowPositions.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,barTime:last.time,createdAt:now(),rejectedReason:why,lotOz:c.positionOz});
       event(s,{type:"CANDIDATE_REJECTED",id:c.id,expert:c.expert,direction:c.direction,reason:why,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
       continue;
     }
-    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,kronosBias:kronos.forecastBias||null,lotOz,costUsd:cost,mfe:0,mae:0,mode:"PAPER"};
-    s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
+    c.signalStatus=model?"MODEL_VALIDATED_PAPER":"UNVALIDATED_EXPERT";
+    const p={id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,risk:c.risk,rr:c.rr,qualityScore:c.qualityScore,openedAt:now(),openedBarTime:last.time,regime:c.regime,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,kronosBias:kronos.forecastBias||null,lotOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,costUsd:cost,mfe:0,mae:0,mode:"PAPER",signalStatus:c.signalStatus};
+    s.openPositions.push(p);accepted.push({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,qualityScore:c.qualityScore,lotOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,status:c.signalStatus,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd});
     event(s,{type:"PAPER_OPEN",id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd});
     console.log("AI_PAPER_OPEN",JSON.stringify({id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,qualityScore:c.qualityScore}));
-    if(s.openPositions.length>=4)break;
+    if(s.openPositions.length>=maxOpenPositions)break;
   }
-  for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
+  for(const c of adaptiveCandidates)s.candidateHistory.push({at:now(),barTime:last.time,id:c.id,expert:c.expert,direction:c.direction,entry:c.entry,stopLoss:c.stopLoss,target:c.target,rr:c.rr,stopAtr:c.stopAtr,qualityScore:c.qualityScore,positionOz:c.positionOz,positionRiskUsd:c.positionRiskUsd,features:c.features,metaFeatures:c.metaFeatures,metaLabel:c.metaLabel,metaEVUsd:c.metaEVUsd,metaEVStressUsd:c.metaEVStressUsd,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,entered:accepted.some(x=>x.id===c.id),signalStatus:c.signalStatus||(rejected.find(x=>x.id===c.id)?.reason||"REJECTED"),rejectionReason:rejected.find(x=>x.id===c.id)?.reason||null});
   if(s.candidateHistory.length>20000)s.candidateHistory=s.candidateHistory.slice(-20000);
   if(s.shadowPositions.length>500)s.shadowPositions=s.shadowPositions.slice(-500);
-  const report={at:now(),source,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?"INDEPENDENT_EXPERTS_RISK_VALIDATED":generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
+  const report={at:now(),source,mode:operatingMode,decision:accepted.length?"PAPER_CANDIDATE_OPENED":"NO_TRADE",reason:accepted.length?(model?"MODEL_EV_VALIDATED":"UNVALIDATED_EXPERT_RULES_PAPER"):generated.candidates.length?"CANDIDATES_REJECTED_BY_RISK":"NO_EXPERT_TRIGGER",
     bar:last.time,regime:regimeResult.regime,regimeConfidence:regimeResult.confidence,regimeChanged:regimeResult.changed,regimeFeatures:regimeResult.features,h1Bias:generated.h1Bias,m15Bias:generated.m15Bias,marketFresh:fresh,quote,atrM5:generated.atr,
     learningData:learningCollection,
     aiOpportunityDiscovery:{status:discovery.status,modelVersion:opportunityModel?.modelVersion||null,candidates:discovery.candidates.length},
     scenarioPrediction:scenarioForecast,
     metaLearning:{status:"PAPER_OUTCOME_ADAPTATION",expertWeights:expertLearning},
-    decisionIntelligence:{status:model?"XGBOOST_EV_AND_STRESS_GATE":"WAITING_FOR_VALIDATED_XGBOOST",policy:"BUY_SELL_NO_TRADE"},
+    decisionIntelligence:{status:model?"XGBOOST_EV_AND_STRESS_GATE":"EXPERT_RULES_NO_PROBABILITIES",policy:"BUY_SELL_NO_TRADE",timeoutMeanR:model?.timeoutMeanR??null},
     expertsEvaluated:["BREAKOUT_CONTINUATION","LIQUIDITY_SWEEP_RECLAIM","BREAKOUT_RETEST","TREND_PULLBACK","TREND_CONTINUATION","RANGE_REJECTION","REVERSAL","MOMENTUM_IMPULSE"],
     candidatesGenerated:adaptiveCandidates.length,expertsSelected:[...new Set(adaptiveCandidates.map(c=>c.expert))],accepted,rejected,openPositions:s.openPositions.length,shadowTracking:s.shadowPositions.length,
     kronos,referenceEngine:{status:engine.status,version:engine.engineVersion,plan:engine.plan?.decision||null,visionBlocked:engine.visionHealth?.entryBlocked??null},
     referenceTrades:trades.ok?trades.overall:null,costUsd:cost,stressCostUsd:stress,stats:stats(s.closedTrades),
     metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},liveTrading:false,
-    disclaimer:model?"PAPER only. XGBoost probabilities require independent validation; discovery/scenario models activate only when separately validated artifacts are installed.":"PAPER only. No probability is fabricated: expert candidates are shadow-tracked until enough outcomes exist to train and validate XGBoost. AI discovery and scenario prediction remain inactive until their own validated artifacts exist."};
+     riskSettings:{maxTradeRiskUsd:maxRisk,dailyLossLimitUsd:dailyLimit,maxOpenPositions,baseExposureOz:lotOz},sameBarPolicy:"If STOP and TARGET are both touched in one candle, STOP is assumed first (worst case).",disclaimer:model?"PAPER only. XGBoost accepted only with validated=true and validation.passed=true.":"PAPER only. EXPERT_RULES recommendations are UNVALIDATED_EXPERT; no probabilities are fabricated."};
   s.lastProcessedBar=last.time;s.lastCycleAt=now();s.lastReport=report;
   await writeState(s);event(s,{type:"CYCLE",bar:last.time,decision:report.decision,candidates:generated.candidates.length,accepted:accepted.length,rejected:rejected.length,regime:generated.regime});
   console.log("AI_ENGINE_CYCLE",JSON.stringify(report));
@@ -313,7 +335,7 @@ async function runCycle(source="scheduled") {
 }
 async function status() {
   const s=await readState(); const model=await loadMetaModel();
-  return {ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",liveTrading:false,lastCycleAt:s.lastCycleAt,lastProcessedBar:s.lastProcessedBar,
+  return {ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",operatingMode:(await loadMetaModel())?"MODEL":"EXPERT_RULES",liveTrading:false,lastCycleAt:s.lastCycleAt,lastProcessedBar:s.lastProcessedBar,
     openPositions:s.openPositions,shadowTracking:s.shadowPositions.length,stats:stats(s.closedTrades),lastReport:s.lastReport,metaLabeler:{status:model?"TRAINED":"COLLECTING_LABELS",trained:!!model,modelVersion:model?.modelVersion||null,trainingSamples:model?.trainSamples||0,validationSamples:model?.validationSamples||0,metrics:model?.walkForwardMetrics||null},storage:"persistent-volume"};
 }
 let running=false;
@@ -322,6 +344,15 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
   if(req.method==="GET"&&(u.pathname==="/"||u.pathname==="/health"))return json({ok:true,service:"Gold AI Intelligence Engine",version:VERSION,mode:"PAPER_ONLY",liveTrading:false});
   if(req.method==="GET"&&u.pathname==="/status")try{return json(await status());}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
   if(req.method==="GET"&&u.pathname==="/analysis")try{const s=await readState();return json(s.lastReport||{decision:"NO_TRADE",reason:"NO_CYCLE_YET"});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
+  if(req.method==="GET"&&u.pathname==="/signals")try{
+    const s=await readState(),closed=s.closedTrades||[],history=s.candidateHistory||[],byExpert:any={};
+    for(const expert of [...new Set([...closed.map((x:any)=>x.expert),...history.map((x:any)=>x.expert)])]) {
+      const trades=closed.filter((x:any)=>x.expert===expert),wins=trades.filter((x:any)=>Number(x.netUsd)>0),losses=trades.filter((x:any)=>Number(x.netUsd)<0);
+      const gp=wins.reduce((a:number,x:any)=>a+Number(x.netUsd),0),gl=Math.abs(losses.reduce((a:number,x:any)=>a+Number(x.netUsd),0));
+      byExpert[expert]={samples:history.filter((x:any)=>x.expert===expert).length,trades:trades.length,wins:wins.length,winRatePct:trades.length?Number((wins.length/trades.length*100).toFixed(2)):null,profitFactor:gl?Number((gp/gl).toFixed(3)):null,netUsd:Number(trades.reduce((a:number,x:any)=>a+Number(x.netUsd||0),0).toFixed(2))};
+    }
+    return json({ok:true,version:VERSION,mode:(await loadMetaModel())?"MODEL":"EXPERT_RULES",latestRecommendations:history.filter((x:any)=>x.entered).slice(-50).reverse(),byExpert,openPositions:s.openPositions,stats:stats(closed),liveTrading:false});
+  }catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
   if(req.method==="GET"&&u.pathname==="/history") {
     if(!isAuthorized(req))return json({ok:false,error:"UNAUTHORIZED"},401);
     try{const s=await readState();return json({ok:true,events:s.events.slice(-120),candidates:s.candidateHistory.slice(-120),openPositions:s.openPositions,closedTrades:s.closedTrades.slice(-120),stats:stats(s.closedTrades)});}catch(e:any){return json({ok:false,error:String(e?.message||e)},503);}
@@ -331,7 +362,7 @@ const server=Bun.serve({port:PORT,hostname:"0.0.0.0",async fetch(req) {
     if(running)return json({ok:true,status:"ALREADY_RUNNING"},202);
     running=true;try{return json(await runCycle("manual"));}catch(e:any){return json({ok:false,error:String(e?.message||e)},502);}finally{running=false;}
   }
-  return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/history","/sync"]},404);
+  return json({ok:false,error:"NOT_FOUND",available:["/health","/status","/analysis","/signals","/history","/sync"]},404);
 }});
 console.log("AI_ENGINE_LISTENING",JSON.stringify({url:server.url,version:VERSION,mode:"PAPER_ONLY",storage:"persistent-volume",urls:URLS}));
 void (async()=>{await sleep(12000);while(true){if(!running){running=true;try{await runCycle("scheduled");}catch(e:any){console.log("AI_ENGINE_LOOP_ERROR",JSON.stringify({message:String(e?.message||e),name:e?.name||null,code:e?.code||null,stack:String(e?.stack||"").slice(0,900)}));}finally{running=false;}}await sleep(300000);}})();
